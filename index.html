@@ -1938,21 +1938,13 @@
       }
       const nowIso = now();
       const base = productsRef.current;
+      const previous = base.find(x => x.id === pid); // snapshot for rollback on failure
       const next = base.map(p => {
         if (p.id !== pid) return p;
-        const updatedStages = { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, at: nowIso } };
-        // If a stage is being marked Completed and the product had "Issues Found",
-        // check if ALL stages are now Completed — if so, clear verdict back to pending
-        // so it re-enters the QC queue for re-approval.
+        const updatedStages = { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, skipped: false, at: nowIso } };
         let verdict = p.verdict;
         let issues = p.issues;
         if (patch.status === "Completed" && p.verdict === "Issues Found") {
-          // Only count a stage as "still blocking re-approval" if it was
-          // actually the one QC sent back (comment prefixed "QC flagged:").
-          // Checking ANY "In Progress" stage was wrong — a card with some
-          // unrelated stage naturally mid-work (nothing to do with the QC
-          // flag) would never clear its verdict, so it could never surface
-          // under "Issue Resolved".
           const flaggedStagesStillPending = STAGES.filter(s => {
             if (s.k === "finalqc") return false;
             const stg = updatedStages[s.k];
@@ -1968,12 +1960,42 @@
       productsRef.current = next;
       setProducts(next);
 
-      // Targeted single-row patch — touches only this product's stage cells on the
-      // backend, so a stale client elsewhere can never overwrite this fresh save.
-      const res = await gsPost("batchPatchStage", { ids: [pid], stageKey, patch });
-      if (!res || res.ok === false) {
-        throw new Error("batchPatchStage failed: " + JSON.stringify(res));
+      // Retry the write a few times — a single dropped/slow request shouldn't
+      // silently lose the change.
+      let res = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        res = await gsPost("batchPatchStage", { ids: [pid], stageKey, patch });
+        if (res && res.ok !== false) break;
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
       }
+
+      if (!res || res.ok === false) {
+        // Roll back the optimistic update so the screen matches what's actually
+        // saved, instead of showing "Completed" while the server has nothing.
+        if (previous) {
+          const rolledBack = productsRef.current.map(p => p.id === pid ? previous : p);
+          productsRef.current = rolledBack;
+          setProducts(rolledBack);
+        }
+        throw new Error("batchPatchStage failed after retries: " + JSON.stringify(res));
+      }
+
+      // Lightweight verification — checks just this one stage row instead
+      // of refetching the entire products table.
+      setTimeout(async () => {
+        try {
+          const r = await fetch(`${API}/api/checkStage?productId=${encodeURIComponent(pid)}&stageKey=${encodeURIComponent(stageKey)}`);
+          const check = await r.json();
+          if (!check.ok) { console.warn("checkStage failed", check); return; }
+          if (!check.row || check.row.status !== patch.status) {
+            console.error(`[VERIFY FAILED] ${stageKey} on product ${pid}: sent "${patch.status}", DB has`, check.row);
+          } else {
+            console.log(`[VERIFY OK] ${stageKey} on product ${pid} confirmed as "${check.row.status}"`);
+          }
+        } catch (e) {
+          console.error("checkStage fetch failed", e);
+        }
+      }, 3000);
 
       const updatedProduct = next.find(x => x.id === pid);
       const originalProduct = base.find(x => x.id === pid);
@@ -1981,9 +2003,6 @@
         await gsPost("patchQCVerdict", { id: pid, verdict: "", issues: "" });
       }
 
-      // Remember that WE just wrote this stage, so a sync that lands shortly after
-      // (and might still carry a stale read from before our write committed) doesn't
-      // overwrite it back. See load()'s merge logic below.
       recentStagePatchRef.current[pid + "|" + stageKey] = Date.now();
 
       const p = next.find(x => x.id === pid), sn = STAGES.find(s => s.k === stageKey).n;
@@ -1995,7 +2014,7 @@
         const nowIso = now();
         const idSet = new Set(ids);
         const base = productsRef.current;
-        const next = base.map(p => !idSet.has(p.id) ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, at: nowIso } }, updatedAt: nowIso });
+        const next = base.map(p => !idSet.has(p.id) ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, skipped: false, at: nowIso } }, updatedAt: nowIso });
         productsRef.current = next;
         setProducts(next);
 
@@ -5259,16 +5278,28 @@ const recentActivityScoped = useMemo(() => {
     const dirty = status !== cur.status || comments !== cur.comments ||
       (isDim && (width !== (cur.width || "") || height !== (cur.height || "") || weight !== (cur.weight || "")));
 
-    const save = () => {
+    const [busy, setBusy] = useState(false);
+    const [saveErr, setSaveErr] = useState("");
+
+    const save = async () => {
       if (status !== cur.status && cur.status === "Completed") {
         setStatus(cur.status); setComments(cur.comments);
         return;
       }
       const patch = { status, person: effectivePerson, comments };
       if (isDim) { patch.width = width; patch.height = height; patch.weight = weight; }
-      onStage(p.id, stage.k, patch);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1400);
+      setBusy(true);
+      setSaveErr("");
+      try {
+        await onStage(p.id, stage.k, patch);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1400);
+      } catch (e) {
+        console.error("Stage save failed", e);
+        setSaveErr("Save failed — please try again.");
+      } finally {
+        setBusy(false);
+      }
     };
 
     if (cur.status === "Completed") return null;
@@ -5293,7 +5324,8 @@ const recentActivityScoped = useMemo(() => {
           </span>
           <input className="txt" placeholder="comments…" value={comments} onChange={e => setComments(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 0 }} />
           <span style={{ fontSize: 10.5, color: "var(--faint)", whiteSpace: "nowrap", flexShrink: 0 }}>{cur.at ? fmt(cur.at) : "—"}</span>
-          <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save} style={{ flexShrink: 0 }}>{saved ? "✓" : "Save"}</button>
+          <button className={"mini " + (saved ? "saved" : "")} disabled={(!dirty && !saved) || busy} onClick={save} style={{ flexShrink: 0 }}>{busy ? "Saving…" : saved ? "✓" : "Save"}</button>
+          {saveErr && <span style={{ fontSize: 10.5, color: "var(--rose-ink)", fontWeight: 600, flexShrink: 0 }}>{saveErr}</span>}
           {p.division === "Bombay Cards" && (
             <button
               onClick={() => onStage(p.id, stage.k, { skipped: true })}
@@ -7070,7 +7102,7 @@ const recentActivityScoped = useMemo(() => {
       if (!wasFlaggedBefore(p)) return false;
       const flaggedKeys = getFlaggedStageKeys(p);
       if (flaggedKeys.length > 0) return flaggedKeys.every(k => p.stages[k]?.status === "Completed");
-      return eligibleStages.every(s => p.stages[s.k].status === "Completed");
+      return eligibleStages.every(s => p.stages[s.k]?.skipped || p.stages[s.k].status === "Completed");
     };
 
 const filtered = useMemo(() => {
@@ -7079,7 +7111,7 @@ const filtered = useMemo(() => {
     if (q && !t.includes(q.toLowerCase())) return false;
     if (isMasterOrAdmin && fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
 
-    const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
+    const allStagesDone = eligibleStages.every(s => p.stages[s.k]?.skipped || p.stages[s.k].status === "Completed");
     const previouslyFlagged = wasFlaggedBefore(p);
     const flaggedKeys = getFlaggedStageKeys(p);
     const flaggedStagesDone = flaggedKeys.length > 0
@@ -7256,7 +7288,7 @@ const filtered = useMemo(() => {
             {filtered.map(p => {
               const st = getVState(p.id);
               const isOpen = !!expanded[p.id];
-              const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
+              const allStagesDone = eligibleStages.every(s => p.stages[s.k]?.skipped || p.stages[s.k].status === "Completed");
               const hasVerdict = !!p.verdict;
               // Once this card already has an open issue, let QC keep raising MORE
               // issues — on whichever stages are still Completed — without waiting

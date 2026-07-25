@@ -451,6 +451,20 @@ app.post("/api/deleteProduct", async (req, res) => {
   }
 });
 
+
+app.get("/api/checkStage", async (req, res) => {
+  const { productId, stageKey } = req.query;
+  try {
+    const { rows } = await pool.query(
+      "SELECT status, updated_at FROM stage_entries WHERE product_id = $1 AND stage_key = $2",
+      [productId, stageKey]
+    );
+    res.json({ ok: true, row: rows[0] || null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 /* ----------------------------------------------------------------
    POST /api/setVendors   body: { "KOC Cards": [...], "Bombay Cards": [...] }
 ---------------------------------------------------------------- */
