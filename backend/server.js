@@ -300,9 +300,9 @@ app.post("/api/batchPatchStage", async (req, res) => {
       for (const id of chunk) {
         await client.query(
           `INSERT INTO stage_entries (product_id, stage_key, status, person, comments, skipped, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6, now())
+           VALUES ($1,$2,COALESCE($3::stage_status,'Not Started'::stage_status),$4,$5,COALESCE($6,false), now())
            ON CONFLICT (product_id, stage_key) DO UPDATE SET
-             status = COALESCE($3, stage_entries.status),
+             status = COALESCE($3::stage_status, stage_entries.status),
              person = COALESCE($4, stage_entries.person),
              comments = COALESCE($5, stage_entries.comments),
              skipped = COALESCE($6, stage_entries.skipped),
