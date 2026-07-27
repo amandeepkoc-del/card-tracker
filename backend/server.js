@@ -72,6 +72,7 @@ async function hydrateProducts(client, productRows) {
       status: r.status,
       person: r.person || "",
       comments: r.comments || "",
+      skipped: !!r.skipped,
       at: r.updated_at ? r.updated_at.toISOString() : "",
       ...(r.stage_key === "dimensions" ? {
         width: r.width_cm != null ? String(r.width_cm) : "",
@@ -298,14 +299,15 @@ app.post("/api/batchPatchStage", async (req, res) => {
       const chunk = ids.slice(i, i + CHUNK);
       for (const id of chunk) {
         await client.query(
-          `INSERT INTO stage_entries (product_id, stage_key, status, person, comments, updated_at)
-           VALUES ($1,$2,$3,$4,$5, now())
+          `INSERT INTO stage_entries (product_id, stage_key, status, person, comments, skipped, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6, now())
            ON CONFLICT (product_id, stage_key) DO UPDATE SET
              status = COALESCE($3, stage_entries.status),
              person = COALESCE($4, stage_entries.person),
              comments = COALESCE($5, stage_entries.comments),
+             skipped = COALESCE($6, stage_entries.skipped),
              updated_at = now()`,
-          [id, stageKey, patch.status || null, patch.person ?? null, patch.comments ?? ""]
+          [id, stageKey, patch.status || null, patch.person ?? null, patch.comments ?? "", patch.skipped ?? null]
         );
         await client.query("UPDATE products SET updated_at = now() WHERE id = $1", [id]);
       }

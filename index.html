@@ -1549,8 +1549,8 @@
 
 
 
-  const API = "https://cardtracker.kingofcards.in"
-  // const API = "http://localhost:8080"
+  // const API = "https://cardtracker.kingofcards.in"
+  const API = "http://localhost:8080"
 
   async function gsGetUsers() {
     try {
@@ -1941,7 +1941,7 @@
       const previous = base.find(x => x.id === pid); // snapshot for rollback on failure
       const next = base.map(p => {
         if (p.id !== pid) return p;
-        const updatedStages = { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, skipped: false, at: nowIso } };
+        const updatedStages = { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, skipped: patch.skipped !== undefined ? patch.skipped : false, at: nowIso } };
         let verdict = p.verdict;
         let issues = p.issues;
         if (patch.status === "Completed" && p.verdict === "Issues Found") {
@@ -2014,7 +2014,7 @@
         const nowIso = now();
         const idSet = new Set(ids);
         const base = productsRef.current;
-        const next = base.map(p => !idSet.has(p.id) ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, skipped: false, at: nowIso } }, updatedAt: nowIso });
+        const next = base.map(p => !idSet.has(p.id) ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, skipped: patch.skipped !== undefined ? patch.skipped : false, at: nowIso } }, updatedAt: nowIso });
         productsRef.current = next;
         setProducts(next);
 
