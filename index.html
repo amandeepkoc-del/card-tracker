@@ -3,7 +3,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
 
@@ -2275,7 +2275,7 @@
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
     const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s, type: "store" }); })); return l; }, [divProducts]);
 
-    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"], qcaudit: ["QC Audit", "Final quality check — approve or flag issues on completed cards"], process: ["Process", "Member performance reports and completed work"] };
+    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"], qcaudit: ["QC Audit", "Final quality check — approve or flag issues on completed cards"], process: ["Process", "Member performance reports and completed work"], analytics: ["Speed Analytics", "Average time-to-complete per pipeline stage"] };
 
     if (!auth) return <Login onLogin={handleLogin} />;
 
@@ -2289,7 +2289,7 @@
 
     const allowedStages = getAllowedStages(auth);
 
-    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear], ["qcaudit", "QC Audit", I.check], ["process", "Process", I.check]];
+    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear], ["qcaudit", "QC Audit", I.check], ["process", "Process", I.check], ["analytics", "Speed Analytics", I.grid]];
     const NAV = ALL_NAV.filter(([k]) => canSeeTab(auth, k));
 
     // If current tab is no longer accessible, switch to first allowed tab
@@ -2360,6 +2360,7 @@
             {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
             {tab === "qcaudit" && <QCAuditTab division={division} products={divProducts} qcAuditLog={qcAuditLog} onSubmit={submitQCAudit} operator={operator} auth={auth} initialFilter={qcAuditFilter} onFilterConsumed={() => setQcAuditFilter(null)} />}
             {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
+            {tab === "analytics" && <SpeedAnalytics division={division} />}
           </div>
         </main>
       </div>
@@ -2429,9 +2430,15 @@
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [fMember, setFMember] = useState("");
+    const [fStage, setFStage] = useState("");
+    const [fStageStatus, setFStageStatus] = useState("");
+    const [nlQuery, setNlQuery] = useState("");
+    const [fEventDate, setFEventDate] = useState("");
     const [dashFromDate, setDashFromDate] = useState("");
     const [dashToDate, setDashToDate] = useState("");  
-    const todayStr = new Date().toISOString().split("T")[0];  
+    const todayStr = new Date().toISOString().split("T")[0];
+    const [snapshotDate, setSnapshotDate] = useState(todayStr);
+    const [showSnapshot, setShowSnapshot] = useState(false); 
     const [issueGlow, setIssueGlow] = useState(false);
     const prevIssuesCountRef = useRef(null); // null = first load, skip the sound 
 
@@ -2440,6 +2447,9 @@
       const me = teamMembers.find(m => m.email && auth?.email && m.email.toLowerCase() === auth.email.toLowerCase());
       return me?.id || null;
     }, [teamMembers, auth]);
+    // Moved up — this used to be declared after the pipelineBreakdown effect
+    // below that already referenced it, causing a TDZ crash on every render.
+    const isMasterOrAdminView = auth?.role === "master" || auth?.role === "admin";
     const [dbStats, setDbStats] = useState(null);
     const [pipelineStats, setPipelineStats] = useState(null);
     const [allMemberStats, setAllMemberStats] = useState([]);
@@ -2501,7 +2511,6 @@
       if (myOwn && !reports.some(m => m.id === myOwn.id)) return [...reports, myOwn];
       return reports;
     }, [teamMembers, myMemberId, auth]);
-    const isMasterOrAdminView = auth?.role === "master" || auth?.role === "admin";
     const memberSkuMap = useMemo(() => {
       const map = {};
       const isMgr = !isMasterOrAdminView && myMemberId;
@@ -2536,6 +2545,25 @@
 
       return map;
     }, [assignments, division, isMasterOrAdminView, myMemberId]);
+
+    // sku(lowercased) -> [{ stage, memberName }] across the whole division —
+    // used to answer "who is working on which stage" for any given card.
+    const skuStageAssignees = useMemo(() => {
+      const map = {};
+      assignments.filter(a => a.division === division).forEach(a => {
+        const key = a.sku.trim().toLowerCase();
+        const member = teamMembers.find(m => m.id === a.memberId);
+        if (!map[key]) map[key] = [];
+        if (a.stage && a.stage !== "all") {
+          map[key].push({ stage: a.stage, memberName: member?.name || "—" });
+        } else {
+          STAGES.filter(s => s.k !== "finalqc").forEach(s => {
+            map[key].push({ stage: s.k, memberName: member?.name || "—" });
+          });
+        }
+      });
+      return map;
+    }, [assignments, division, teamMembers]);
     const vendorOptions = (vendors || []).map(v => v.trim()).filter(Boolean);
     const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
     // Base everything on this manager's full assigned pool (memberId === myMemberId,
@@ -2556,37 +2584,81 @@
 
     //date wise filter
     const dashboardActivity = useMemo(() => {
-  if (!dashFromDate && !dashToDate) return [];
-  const myName = (auth?.name || "").trim().toLowerCase();
-  const myEmail = (auth?.email || "").trim().toLowerCase();
+      if (!dashFromDate && !dashToDate) return [];
+      const myName = (auth?.name || "").trim().toLowerCase();
+      const myEmail = (auth?.email || "").trim().toLowerCase();
 
-  return (audit || [])
-    .filter(a => {
-      const d = new Date(a.at);
-      if (isNaN(d.getTime())) return false;
-      if (dashFromDate && d < new Date(dashFromDate + "T00:00:00")) return false;
-      if (dashToDate && d > new Date(dashToDate + "T23:59:59.999")) return false;
-      if (a.division && a.division !== division) return false;
+      return (audit || [])
+        .filter(a => {
+          const d = new Date(a.at);
+          if (isNaN(d.getTime())) return false;
+          if (dashFromDate && d < new Date(dashFromDate + "T00:00:00")) return false;
+          if (dashToDate && d > new Date(dashToDate + "T23:59:59.999")) return false;
+          if (a.division && a.division !== division) return false;
 
-      if (!isMasterOrAdminView) {
+          if (!isMasterOrAdminView) {
+            const actor = (a.actor || "").trim().toLowerCase();
+            if (actor !== myName && actor !== myEmail) return false;
+          }
+
+          return true;
+        })
+        .sort((x, y) => new Date(y.at) - new Date(x.at));
+    }, [audit, dashFromDate, dashToDate, division, isMasterOrAdminView, auth]);
+
+    const dailySnapshot = useMemo(() => {
+      const myName = (auth?.name || "").trim().toLowerCase();
+      const myEmail = (auth?.email || "").trim().toLowerCase();
+      const dayStart = new Date(snapshotDate + "T00:00:00");
+      const dayEnd = new Date(snapshotDate + "T23:59:59.999");
+
+      const rowsForDay = (audit || []).filter(a => {
+        const d = new Date(a.at);
+        if (isNaN(d.getTime()) || d < dayStart || d > dayEnd) return false;
+        if (a.division && a.division !== division) return false;
+        if (!isMasterOrAdminView) {
+          const actor = (a.actor || "").trim().toLowerCase();
+          if (actor !== myName && actor !== myEmail) return false;
+        }
+        return true;
+      });
+
+      const completedSkus = new Set(), issueSkus = new Set(), inProgressSkus = new Set(), addedSkus = new Set();
+
+      rowsForDay.forEach(a => {
+        if (a.action === "Stage update") {
+          const m = String(a.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+          if (!m) return;
+          const status = m[2].trim();
+          if (status === "Completed") completedSkus.add(a.entity);
+          else if (status === "Issue") issueSkus.add(a.entity);
+          else if (status === "In Progress") inProgressSkus.add(a.entity);
+        } else if (a.action === "Added product") {
+          addedSkus.add(a.entity);
+        } else if (a.action === "QC Audit" && String(a.detail || "").startsWith("Issues Found")) {
+          issueSkus.add(a.entity);
+        }
+      });
+
+      return {
+        completed: completedSkus.size,
+        issues: issueSkus.size,
+        inProgress: inProgressSkus.size,
+        added: addedSkus.size,
+        totalActions: rowsForDay.length,
+      };
+    }, [audit, snapshotDate, division, isMasterOrAdminView, auth]);
+
+
+    const recentActivityScoped = useMemo(() => {
+      const myName = (auth?.name || "").trim().toLowerCase();
+      const myEmail = (auth?.email || "").trim().toLowerCase();
+      return (audit || []).filter(a => {
+        if (isMasterOrAdminView) return true;
         const actor = (a.actor || "").trim().toLowerCase();
-        if (actor !== myName && actor !== myEmail) return false;
-      }
-
-      return true;
-    })
-    .sort((x, y) => new Date(y.at) - new Date(x.at));
-}, [audit, dashFromDate, dashToDate, division, isMasterOrAdminView, auth]);
-
-const recentActivityScoped = useMemo(() => {
-  const myName = (auth?.name || "").trim().toLowerCase();
-  const myEmail = (auth?.email || "").trim().toLowerCase();
-  return (audit || []).filter(a => {
-    if (isMasterOrAdminView) return true;
-    const actor = (a.actor || "").trim().toLowerCase();
-    return actor === myName || actor === myEmail;
-  });
-}, [audit, isMasterOrAdminView, auth]);
+        return actor === myName || actor === myEmail;
+      });
+    }, [audit, isMasterOrAdminView, auth]);
 
    
 
@@ -2631,6 +2703,7 @@ const recentActivityScoped = useMemo(() => {
 
       const perStage = assignedStageKeys.map(stageKey => {
         let completed = 0, inProgress = 0, issue = 0, notStarted = 0, total = 0;
+        const pendingSkus = []; // SKUs where THIS stage isn't done yet
         Object.entries(skuStageMap).forEach(([sku, stages]) => {
           if (!stages.has(stageKey)) return;
           const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
@@ -2638,12 +2711,15 @@ const recentActivityScoped = useMemo(() => {
           total++;
           const status = prod.stages?.[stageKey]?.status || "Not Started";
           if (status === "Completed") completed++;
-          else if (status === "In Progress") inProgress++;
-          else if (status === "Issue") issue++;
-          else notStarted++;
+          else {
+            if (status === "In Progress") inProgress++;
+            else if (status === "Issue") issue++;
+            else notStarted++;
+            pendingSkus.push({ sku: prod.sku, status });
+          }
         });
         const s = STAGES.find(x => x.k === stageKey);
-        return { key: stageKey, name: s?.n || stageKey, completed, inProgress, issue, notStarted, total };
+        return { key: stageKey, name: s?.n || stageKey, completed, inProgress, issue, notStarted, total, pendingSkus };
       });
 
       const cardsAssigned = Object.keys(skuStageMap).length;
@@ -2675,6 +2751,61 @@ const recentActivityScoped = useMemo(() => {
         .map(([label, members]) => ({ label, members: members.sort((a, b) => a.name.localeCompare(b.name)) }))
         .sort((a, b) => a.label === "Myself" ? -1 : b.label === "Myself" ? 1 : a.label.localeCompare(b.label));
     }, [myTeam, teamMembers, myMemberId]);
+
+    const runNLQuery = useCallback(() => {
+      const t = nlQuery.toLowerCase().trim();
+      if (!t) return;
+
+      // status
+      const statusMap = [
+        [/not\s*started/, "Not Started"],
+        [/in\s*progress|wip|ongoing/, "In Progress"],
+        [/complete|done|finished/, "Completed"],
+        [/issue|flagged|problem/, "Issue"],
+      ];
+      let matchedStatus = "";
+      for (const [re, val] of statusMap) if (re.test(t)) { matchedStatus = val; break; }
+
+      // member — match against myTeam names (longest name first avoids partial clashes)
+      const sortedTeam = [...myTeam].sort((a, b) => b.name.length - a.name.length);
+      const matchedMember = sortedTeam.find(m => t.includes(m.name.toLowerCase()));
+
+      // stage — match against stage names
+      const sortedStages = [...STAGES].filter(s => s.k !== "finalqc").sort((a, b) => b.n.length - a.n.length);
+      const matchedStage = sortedStages.find(s => t.includes(s.n.toLowerCase()));
+
+      // vendor
+      const matchedVendor = vendorOptions.find(v => t.includes(v.toLowerCase()));
+
+      // set no — look for "set <number>" or a bare token matching a known set no
+      const matchedSetNo = setNoOptions.find(s => t.includes(s.toLowerCase()));
+
+      // date — "today", "yesterday", DD-MM-YYYY / DD/MM/YYYY, or YYYY-MM-DD
+      let matchedDate = "";
+      if (/\btoday\b/.test(t)) {
+        matchedDate = todayStr;
+      } else if (/\byesterday\b/.test(t)) {
+        const d = new Date(); d.setDate(d.getDate() - 1);
+        matchedDate = d.toISOString().split("T")[0];
+      } else {
+        const isoMatch = t.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+        const dmyMatch = t.match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+        if (isoMatch) {
+          const [, y, mo, d] = isoMatch;
+          matchedDate = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        } else if (dmyMatch) {
+          const [, d, mo, y] = dmyMatch;
+          matchedDate = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        }
+      }
+
+      setFMember(matchedMember ? matchedMember.id : "");
+      setFStage(matchedStage ? matchedStage.k : "");
+      setFStageStatus(matchedStatus);
+      setFVendor(matchedVendor || "");
+      setFSetNo(matchedSetNo || "");
+      setFEventDate(matchedDate || "");
+    }, [nlQuery, myTeam, vendorOptions, setNoOptions, todayStr]);
 
     // Single source of truth for "is this card done, for this manager's own scope".
     // A card counts as complete only when every stage THIS manager was specifically
@@ -2808,24 +2939,28 @@ const recentActivityScoped = useMemo(() => {
           .map(a => a.sku.trim().toLowerCase())
       );
     }, [assignments, division, myMemberId]);
-    const filteredProducts = useMemo(() => {
-  // When a team member is selected, scope pipeline table to THEIR cards only
-  // drawn from the full division pool so counts reflect actual DB stage statuses
-      if (fMember) {
-        const memberSkus = memberSkuMap[fMember];
-        return (allDivProducts || products).filter(p =>
-          (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
-          (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase()) &&
-          (memberSkus?.has((p.sku || "").trim().toLowerCase()))
-        );
+    const stageStatusMatches = useCallback((p) => {
+      if (!fStage || !fStageStatus) return true;
+      const stg = p.stages?.[fStage];
+      if (!stg) return fStageStatus === "Not Started";
+      if (fStageStatus === "Issue") {
+        const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+        return stg.status === "Issue" || isQcFlagged;
       }
-      // No member filter — show chitra's complete 96-card pool
-      return myFullPool.filter(p =>
+      return stg.status === fStageStatus;
+    }, [fStage, fStageStatus]);
+
+    const filteredProducts = useMemo(() => {
+      const base = fMember
+        ? (allDivProducts || products).filter(p => memberSkuMap[fMember]?.has((p.sku || "").trim().toLowerCase()))
+        : myFullPool;
+      return base.filter(p =>
         (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
-        (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase())
+        (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase()) &&
+        stageStatusMatches(p)
       );
-    }, [myFullPool, allDivProducts, products, fVendor, fSetNo, fMember, memberSkuMap]);
-    const hasFilters = fVendor || fSetNo || fMember;
+    }, [myFullPool, allDivProducts, products, fVendor, fSetNo, fMember, memberSkuMap, stageStatusMatches]);
+    const hasFilters = fVendor || fSetNo || fMember || fStage || fStageStatus || fEventDate;
 
     const total = myFullPool.length;
     const useDbForDonut = !fMember && !fVendor && !fSetNo && !isMasterOrAdminView && dbStats;
@@ -2887,6 +3022,58 @@ const recentActivityScoped = useMemo(() => {
       });
       return map;
     }, [issuesList]);
+
+    const stageActivityMap = useMemo(() => {
+      const map = {};
+      filteredProducts.forEach(p => {
+        STAGES.forEach(s => {
+          if (s.k === "finalqc") return;
+          const stg = p.stages[s.k];
+          if (stg && stg.status === "In Progress") {
+            (map[s.k] ||= []).push({ sku: p.sku, person: stg.person || "" });
+          }
+        });
+      });
+      return map;
+    }, [filteredProducts]);
+
+    // Date-scoped stage activity — derived from the audit log itself, since
+    // current product state only reflects "now", not "what happened on X day".
+    const dateScopedStageStats = useMemo(() => {
+      if (!fEventDate) return null;
+      const myName = (auth?.name || "").trim().toLowerCase();
+      const myEmail = (auth?.email || "").trim().toLowerCase();
+      const dayStart = new Date(fEventDate + "T00:00:00");
+      const dayEnd = new Date(fEventDate + "T23:59:59.999");
+
+      const map = {};
+      STAGES.filter(s => s.k !== "finalqc").forEach(s => {
+        map[s.k] = { inProgress: 0, completed: 0, issue: 0, skus: { inProgress: [], completed: [], issue: [] } };
+      });
+
+      (audit || []).forEach(a => {
+        if (a.action !== "Stage update") return;
+        const d = new Date(a.at);
+        if (isNaN(d.getTime()) || d < dayStart || d > dayEnd) return;
+        if (a.division && a.division !== division) return;
+        if (!isMasterOrAdminView) {
+          const actor = (a.actor || "").trim().toLowerCase();
+          if (actor !== myName && actor !== myEmail) return;
+        }
+        const m = String(a.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+        if (!m) return;
+        const stageName = m[1].trim();
+        const status = m[2].trim();
+        const stageObj = STAGES.find(s => s.n === stageName);
+        if (!stageObj || !map[stageObj.k]) return;
+        if (status === "Completed") { map[stageObj.k].completed++; map[stageObj.k].skus.completed.push(a.entity); }
+        else if (status === "In Progress") { map[stageObj.k].inProgress++; map[stageObj.k].skus.inProgress.push(a.entity); }
+        else if (status === "Issue") { map[stageObj.k].issue++; map[stageObj.k].skus.issue.push(a.entity); }
+      });
+
+      return map;
+    }, [audit, fEventDate, division, isMasterOrAdminView, auth]);
+
 
     const hasScopeFilter = !!(fVendor || fSetNo);
 
@@ -3231,6 +3418,53 @@ const recentActivityScoped = useMemo(() => {
               </div>
             )}
           </div>
+
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowSnapshot(v => !v)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600,
+                padding: "7px 12px", borderRadius: 9, cursor: "pointer",
+                border: "1px solid var(--line2)", background: "var(--card)", color: "var(--muted)",
+              }}
+            >
+              📊 Daily snapshot
+            </button>
+
+            {showSnapshot && (
+              <div className="card pad" style={{
+                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 20,
+                width: 300, boxShadow: "var(--shadow-lg)",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                  <input type="date" value={snapshotDate} max={todayStr} onChange={e => setSnapshotDate(e.target.value)}
+                    style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
+                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setSnapshotDate(todayStr)}>Today</button>
+                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11 }}
+                    onClick={() => { const d = new Date(); d.setDate(d.getDate() - 1); setSnapshotDate(d.toISOString().split("T")[0]); }}>
+                    Yesterday
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span>🆕 Cards added</span><b>{dailySnapshot.added}</b>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span>… Moved to In Progress</span><b>{dailySnapshot.inProgress}</b>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--sage-ink)" }}>
+                    <span>✓ Completed</span><b>{dailySnapshot.completed}</b>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--rose-ink)" }}>
+                    <span>⚠ Issues raised</span><b>{dailySnapshot.issues}</b>
+                  </div>
+                  <div style={{ borderTop: "1px solid var(--line)", paddingTop: 6, display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--muted)" }}>
+                    <span>Total actions logged</span><b>{dailySnapshot.totalActions}</b>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
 
@@ -3303,6 +3537,26 @@ const recentActivityScoped = useMemo(() => {
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 6, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <h3>Pipeline progress</h3>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <input
+                className="txt"
+                placeholder='Try: "skus under Rahul which are not started"'
+                value={nlQuery}
+                onChange={e => setNlQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") runNLQuery(); }}
+                style={{ flex: 1 }}
+              />
+              <button className="primary" style={{ padding: "9px 16px", fontSize: 12.5 }} onClick={runNLQuery}>Apply</button>
+              {nlQuery && (
+                <button className="ghost" style={{ padding: "9px 12px", fontSize: 12.5 }}
+                  onClick={() => { setNlQuery(""); setFVendor(""); setFSetNo(""); setFMember(""); setFStage(""); setFStageStatus(""); setFEventDate(""); }}>
+                  ✕ Clear
+                </button>
+              )}
+            </div>
+            <div className="sec-h" style={{ marginBottom: 6, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div />
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
                 <select value={fVendor} onChange={e => setFVendor(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 11.5, color: fVendor ? "var(--ink)" : "var(--muted)" }}>
                   <option value="">— all vendors —</option>
@@ -3337,11 +3591,25 @@ const recentActivityScoped = useMemo(() => {
                     ))}
                   </select>
                 )}
-                {hasFilters && <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { setFVendor(""); setFSetNo(""); setFMember(""); }}>Clear</button>}
-                <span className="hint" style={{ whiteSpace: "nowrap" }}>manufacturing → listing → dispatch</span>
+                <select value={fStage} onChange={e => { setFStage(e.target.value); if (!e.target.value) setFStageStatus(""); }} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 11.5, color: fStage ? "var(--ink)" : "var(--muted)" }}>
+                  <option value="">— any stage —</option>
+                  {STAGES.filter(s => s.k !== "finalqc").map(s => <option key={s.k} value={s.k}>{s.n}</option>)}
+                </select>
+                <select value={fStageStatus} onChange={e => setFStageStatus(e.target.value)} disabled={!fStage} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: fStage ? "var(--card)" : "var(--card-2)", fontSize: 11.5, opacity: fStage ? 1 : .5, color: fStageStatus ? "var(--ink)" : "var(--muted)" }}>
+                  <option value="">— any status —</option>
+                  {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <input type="date" value={fEventDate} max={todayStr} onChange={e => setFEventDate(e.target.value)}
+                  style={{ border: `1px solid ${fEventDate ? "var(--sky)" : "var(--line2)"}`, borderRadius: 8, padding: "6px 10px", background: fEventDate ? "var(--sky-bg)" : "var(--card)", fontSize: 11.5, color: fEventDate ? "var(--sky-ink)" : "var(--muted)", fontWeight: fEventDate ? 700 : 400 }} />
+                {hasFilters && <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { setFVendor(""); setFSetNo(""); setFMember(""); setFStage(""); setFStageStatus(""); setFEventDate(""); setNlQuery(""); }}>Clear</button>}
               </div>
             </div>
-            {hasFilters && <div className="tag" style={{ marginBottom: 10 }}>Showing {filteredProducts.length} of {totalVal} {division} products{fVendor ? ` · vendor: ${fVendor}` : ""}{fSetNo ? ` · set no: ${fSetNo}` : ""}{fMember ? ` · member filter` : ""}</div>}
+            {hasFilters && <div className="tag" style={{ marginBottom: 10, fontWeight: 700 }}>Showing {filteredProducts.length} of {totalVal} {division} products{fVendor ? ` · vendor: ${fVendor}` : ""}{fSetNo ? ` · set no: ${fSetNo}` : ""}{fMember ? ` · member filter` : ""}{fEventDate ? ` · activity on ${fEventDate}` : ""}</div>}
+            {fEventDate && (
+              <div className="note" style={{ marginBottom: 10 }}>
+                Showing what actually happened on <b>{fEventDate}</b> — counts come from the activity log, not current live status. Clear the date to go back to the live pipeline view.
+              </div>
+            )}
             {selectedMemberBreakdown && (
               <div style={{ marginBottom: 14, border: "1px solid var(--sky)", background: "var(--sky-bg)", borderRadius: 12, padding: "12px 16px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
@@ -3361,7 +3629,7 @@ const recentActivityScoped = useMemo(() => {
                 ) : (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {selectedMemberBreakdown.perStage.map(s => (
-                      <div key={s.key} style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 12px", minWidth: 150 }}>
+                      <div key={s.key} style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 12px", minWidth: 190 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{s.name}</div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--sage-ink)" }}>✓ {s.completed}</span>
@@ -3369,6 +3637,14 @@ const recentActivityScoped = useMemo(() => {
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted)" }}>○ {s.notStarted}</span>
                           {s.issue > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--rose-ink)" }}>! {s.issue}</span>}
                         </div>
+                        {s.pendingSkus.length > 0 && (
+                          <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--line)", display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {s.pendingSkus.slice(0, 4).map((ps, i) => (
+                              <span key={i} className="psku" style={{ fontSize: 9.5, padding: "1px 6px" }} title={ps.status}>{ps.sku}</span>
+                            ))}
+                            {s.pendingSkus.length > 4 && <span className="tag" style={{ fontSize: 9.5 }}>+{s.pendingSkus.length - 4} more</span>}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -3380,7 +3656,7 @@ const recentActivityScoped = useMemo(() => {
                 <thead>
                   <tr>
                     <th style={{ textAlign: "left", padding: "8px 10px", color: "var(--muted)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)", width: 180 }}>Stage</th>
-                    <th style={{ textAlign: "center", padding: "8px 10px", color: "#B3AFA4", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>Not Started</th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", color: "#B3AFA4", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}><b>Not Started</b></th>
                     <th style={{ textAlign: "center", padding: "8px 10px", color: "var(--sky-ink)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>In Progress</th>
                     <th style={{ textAlign: "center", padding: "8px 10px", color: "var(--sage-ink)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>Completed</th>
                     <th style={{ textAlign: "center", padding: "8px 10px", color: "var(--rose-ink)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>Issue</th>
@@ -3388,6 +3664,32 @@ const recentActivityScoped = useMemo(() => {
                 </thead>
                 <tbody>
                   {stageStats.map(s => {
+                    // Date filter takes priority — show what actually HAPPENED on
+                    // that day (from the audit log), not the current live state.
+                    if (fEventDate && dateScopedStageStats) {
+                      const ds = dateScopedStageStats[s.k] || { inProgress: 0, completed: 0, issue: 0 };
+                      return (
+                        <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
+                          <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}><span style={{ color: "var(--faint)" }}>—</span></td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                            {ds.inProgress > 0
+                              ? <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{ds.inProgress}</span>
+                              : <span style={{ color: "var(--faint)" }}>—</span>}
+                          </td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                            {ds.completed > 0
+                              ? <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{ds.completed}</span>
+                              : <span style={{ color: "var(--faint)" }}>—</span>}
+                          </td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                            {ds.issue > 0
+                              ? <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{ds.issue}</span>
+                              : <span style={{ color: "var(--faint)" }}>—</span>}
+                          </td>
+                        </tr>
+                      );
+                    }
                     // When a member is selected, use their own assigned-stage counts
                     // (computed in selectedMemberBreakdown) instead of the full pool.
                     const memberStage = fMember && selectedMemberBreakdown
@@ -3403,7 +3705,19 @@ const recentActivityScoped = useMemo(() => {
                     const issue = memberStage ? memberStage.issue : (s.issue || 0);
                     return (
                       <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
-                        <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
+                        <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>
+                          {s.n}
+                          {(() => {
+                            const activity = stageActivityMap[s.k] || [];
+                            if (activity.length === 0) return null;
+                            const names = [...new Set(activity.map(a => a.person).filter(Boolean))];
+                            return (
+                              <div style={{ fontSize: 10.5, fontWeight: 500, color: "var(--sky-ink)", marginTop: 2 }}>
+                                {activity.length} in progress{names.length ? ` · ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}` : ""}
+                              </div>
+                            );
+                          })()}
+                        </td>
                         <td style={{ textAlign: "center", padding: "10px 10px" }}>
                           {notStarted > 0
                             ? <span style={{ background: "#F0EEE8", color: "#8C887E", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{notStarted}</span>
@@ -3448,6 +3762,45 @@ const recentActivityScoped = useMemo(() => {
                 </tbody>
               </table>
             </div>
+
+            {hasFilters && (
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 8 }}>
+                  Per-SKU breakdown — who's on what ({filteredProducts.length} cards)
+                </div>
+                <div style={{ maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                  {filteredProducts.slice(0, 60).map(p => {
+                    const rows = skuStageAssignees[p.sku.trim().toLowerCase()] || [];
+                    const stagesToShow = fStage ? [fStage] : STAGES.filter(s => s.k !== "finalqc").map(s => s.k);
+                    return (
+                      <div key={p.id} style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9, padding: "8px 12px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                          <span className="psku">{p.sku}</span>
+                          {p.name && <span style={{ fontSize: 12, fontWeight: 600 }}>{p.name}</span>}
+                          <span className="tag">· {p.vendor || "—"}</span>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {stagesToShow.map(stageKey => {
+                            const stg = p.stages?.[stageKey];
+                            const status = stg?.status || "Not Started";
+                            if (fStageStatus && status !== fStageStatus) return null;
+                            const s = STAGES.find(x => x.k === stageKey);
+                            const who = rows.find(r => r.stage === stageKey)?.memberName;
+                            const c = statusClass(status);
+                            return (
+                              <span key={stageKey} className={"chip " + c} title={who ? `Assigned to ${who}` : "Unassigned"}>
+                                <span className="dot" />{s?.n}{who ? ` · ${who}` : ""}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {filteredProducts.length > 60 && <div className="tag">+{filteredProducts.length - 60} more — narrow the filters to see them all</div>}
+                </div>
+              </div>
+            )}
           </div>
           </div>
 
@@ -6786,6 +7139,75 @@ const recentActivityScoped = useMemo(() => {
   }
 
 
+  // ---- Speed analytics: derive per-member turnaround time from the audit log ----
+// Reuses the same "Stage update" entries Process/AuditLog already parse
+// (detail format: "<Stage> → <Status>[ · person]"). No backend change needed.
+    function computeMemberSpeedStats(auditRows) {
+      const parsed = [];
+      auditRows.forEach(a => {
+        if (a.action !== "Stage update") return;
+        const detail = String(a.detail || "");
+        const m = detail.match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+        if (!m) return;
+        parsed.push({
+          sku: a.entity,
+          stageName: m[1].trim(),
+          status: m[2].trim(),
+          person: (m[3] || "").trim() || (a.actor || "").trim(),
+          at: a.at,
+        });
+      });
+      parsed.sort((x, y) => new Date(x.at) - new Date(y.at));
+
+      const lastInProgress = {};  // "sku|stage" -> timestamp of most recent "In Progress"
+      const byMember = {};        // person name -> accumulator
+
+      const touch = (name) => (byMember[name] ||= { durations: [], completions: 0, issues: 0, byStage: {} });
+
+      parsed.forEach(row => {
+        const key = row.sku + "|" + row.stageName;
+        if (row.status === "In Progress") {
+          lastInProgress[key] = row.at;
+        } else if (row.status === "Completed") {
+          const startedAt = lastInProgress[key];
+          if (startedAt && row.person) {
+            const hours = (new Date(row.at) - new Date(startedAt)) / 36e5;
+            // discard bad/stalled outliers (>60 days) so one forgotten card
+            // doesn't wreck someone's average
+            if (hours > 0 && hours < 24 * 60) {
+              const acc = touch(row.person);
+              acc.durations.push(hours);
+              acc.completions++;
+              (acc.byStage[row.stageName] ||= []).push(hours);
+            }
+          }
+          delete lastInProgress[key];
+        } else if (row.status === "Issue" && row.person) {
+          touch(row.person).issues++;
+        }
+      });
+
+      return Object.entries(byMember).map(([name, m]) => {
+        const avgHours = m.durations.length ? m.durations.reduce((a, b) => a + b, 0) / m.durations.length : null;
+        const stageAverages = Object.entries(m.byStage)
+          .map(([stageName, arr]) => ({ stageName, avgHours: arr.reduce((a, b) => a + b, 0) / arr.length, count: arr.length }))
+          .sort((a, b) => a.avgHours - b.avgHours);
+        return {
+          name,
+          completions: m.completions,
+          avgHours,
+          issues: m.issues,
+          issueRate: (m.completions + m.issues) ? m.issues / (m.completions + m.issues) : 0,
+          fastestStage: stageAverages[0] || null,
+          slowestStage: stageAverages[stageAverages.length - 1] || null,
+          stageAverages,
+        };
+      })
+      .filter(x => x.completions > 0)
+      .sort((a, b) => a.avgHours - b.avgHours); // fastest first
+    }
+
+
   function Process({ division, products, teamMembers, assignments, audit }) {
     const [selMonth, setSelMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
     const [expandedMember, setExpandedMember] = useState(null);
@@ -7031,6 +7453,73 @@ const recentActivityScoped = useMemo(() => {
       </div>
     );
   }
+
+  function SpeedAnalytics({ division }) {
+      const [stats, setStats] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const canvasRef = useRef(null);
+      const chartRef = useRef(null);
+
+      useEffect(() => {
+        setLoading(true);
+        fetch(`${API}/api/stageSpeedStats?division=${encodeURIComponent(division)}`)
+          .then(r => r.json())
+          .then(data => { if (data.ok) setStats(data.stats); setLoading(false); })
+          .catch(e => { console.error("stageSpeedStats fetch failed", e); setLoading(false); });
+      }, [division]);
+
+      useEffect(() => {
+        if (!stats || !canvasRef.current || typeof Chart === "undefined") return;
+        if (chartRef.current) chartRef.current.destroy();
+        chartRef.current = new Chart(canvasRef.current, {
+          type: "bar",
+          data: {
+            labels: stats.map(s => s.stageName),
+            datasets: [{
+              label: "Avg hours to complete",
+              data: stats.map(s => Math.round(s.avgHours * 10) / 10),
+              backgroundColor: stats.map(s => s.avgHours > (stats.reduce((a,b)=>a+b.avgHours,0)/stats.length) ? "#D89F9F" : "#9CBE9A"),
+              borderRadius: 6,
+            }]
+          },
+          options: {
+            indexAxis: "y",
+            plugins: { legend: { display: false } },
+            scales: { x: { title: { display: true, text: "Hours" } } }
+          }
+        });
+        return () => { if (chartRef.current) chartRef.current.destroy(); };
+      }, [stats]);
+
+      if (loading) return <div className="card empty">Loading speed data…</div>;
+      if (!stats || stats.length === 0) return <div className="card empty">Not enough completed stages yet to compute speed.</div>;
+
+      const fastest = stats[0], slowest = stats[stats.length - 1];
+
+      return (
+        <div>
+          <div className="note">Average time from when a stage is marked "In Progress" to when it's marked "Completed" — based on {division}'s full activity history.</div>
+          <div className="grid kpis" style={{ marginTop: 16 }}>
+            <div className="card kpi">
+              <div className="lab">Fastest stage</div>
+              <div className="val" style={{ color: "var(--sage-ink)", fontSize: 22 }}>{fastest.stageName}</div>
+              <div className="sub">{fastest.avgHours.toFixed(1)} hrs avg · {fastest.sampleCount} samples</div>
+            </div>
+            <div className="card kpi">
+              <div className="lab">Slowest stage</div>
+              <div className="val" style={{ color: "var(--rose-ink)", fontSize: 22 }}>{slowest.stageName}</div>
+              <div className="sub">{slowest.avgHours.toFixed(1)} hrs avg · {slowest.sampleCount} samples</div>
+            </div>
+          </div>
+          <div className="card pad sec">
+            <div className="sec-h"><h3>Stage speed comparison</h3><span className="hint">lower = faster</span></div>
+            <div style={{ height: Math.max(280, stats.length * 40) }}>
+              <canvas ref={canvasRef} />
+            </div>
+          </div>
+        </div>
+      );
+    }
 
   function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth, initialFilter = null, onFilterConsumed }) {
     const [q, setQ] = useState("");

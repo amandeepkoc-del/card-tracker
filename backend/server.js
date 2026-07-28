@@ -1275,6 +1275,142 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
   }
 });
 
+/* ----------------------------------------------------------------
+   GET /api/stageSpeedStats?division=KOC Cards
+   Average time-to-complete per stage, computed from audit_log.
+---------------------------------------------------------------- */
+app.get("/api/stageSpeedStats", async (req, res) => {
+  const { division } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT entity, detail, logged_at FROM audit_log
+       WHERE action = 'Stage update' AND division = $1
+       ORDER BY entity, logged_at ASC`,
+      [division]
+    );
+
+    // entity+stage -> { firstInProgress, firstCompleted }
+    const track = {};
+    rows.forEach(r => {
+      const m = String(r.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·|$)/);
+      if (!m) return;
+      const stageName = m[1].trim();
+      const status = m[2].trim();
+      const key = r.entity + "||" + stageName;
+      if (!track[key]) track[key] = { stageName, firstInProgress: null, firstCompleted: null };
+      const t = track[key];
+      if (status === "In Progress" && !t.firstInProgress) t.firstInProgress = r.logged_at;
+      if (status === "Completed" && !t.firstCompleted && t.firstInProgress) t.firstCompleted = r.logged_at;
+    });
+
+    const byStage = {};
+    Object.values(track).forEach(t => {
+      if (!t.firstInProgress || !t.firstCompleted) return;
+      const hours = (new Date(t.firstCompleted) - new Date(t.firstInProgress)) / 3600000;
+      if (hours < 0 || hours > 24 * 60) return; // discard bad/outlier data
+      (byStage[t.stageName] ||= []).push(hours);
+    });
+
+    const stats = Object.entries(byStage).map(([stageName, durations]) => ({
+      stageName,
+      avgHours: durations.reduce((a, b) => a + b, 0) / durations.length,
+      sampleCount: durations.length,
+    })).sort((a, b) => a.avgHours - b.avgHours);
+
+    res.json({ ok: true, stats });
+  } catch (e) {
+    console.error("stageSpeedStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/memberSpeedStats?division=KOC Cards
+   Per-member turnaround speed + issue rate, computed from audit_log.
+   "Speed" = avg hours between a stage's first "In Progress" and its
+   next "Completed", attributed to whoever completed it.
+---------------------------------------------------------------- */
+app.get("/api/memberSpeedStats", async (req, res) => {
+  const { division } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT entity, detail, logged_at, actor_name FROM audit_log
+       WHERE action = 'Stage update' AND division = $1
+       ORDER BY entity, logged_at ASC`,
+      [division]
+    );
+
+    const lastInProgress = {}; // "sku||stageName" -> timestamp
+    const byMember = {};       // person name -> accumulator
+
+    const touch = (name) => (byMember[name] ||= { durations: [], completions: 0, issues: 0, byStage: {} });
+
+    rows.forEach(r => {
+      const m = String(r.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+      if (!m) return;
+      const stageName = m[1].trim();
+      const status = m[2].trim();
+      const person = (m[3] || "").trim() || (r.actor_name || "").trim();
+      const key = r.entity + "||" + stageName;
+
+      if (status === "In Progress") {
+        lastInProgress[key] = r.logged_at;
+      } else if (status === "Completed") {
+        const startedAt = lastInProgress[key];
+        if (startedAt && person) {
+          const hours = (new Date(r.logged_at) - new Date(startedAt)) / 3600000;
+          // discard bad/stalled outliers (>60 days) so one forgotten card
+          // doesn't wreck someone's average
+          if (hours > 0 && hours < 24 * 60) {
+            const acc = touch(person);
+            acc.durations.push(hours);
+            acc.completions++;
+            (acc.byStage[stageName] ||= []).push(hours);
+          }
+        }
+        delete lastInProgress[key];
+      } else if (status === "Issue" && person) {
+        touch(person).issues++;
+      }
+    });
+
+    const members = Object.entries(byMember).map(([name, m]) => {
+      const avgHours = m.durations.length
+        ? m.durations.reduce((a, b) => a + b, 0) / m.durations.length
+        : null;
+      const stageBreakdown = Object.entries(m.byStage)
+        .map(([stageName, arr]) => ({
+          stageName,
+          avgHours: arr.reduce((a, b) => a + b, 0) / arr.length,
+          count: arr.length,
+        }))
+        .sort((a, b) => a.avgHours - b.avgHours);
+      return {
+        name,
+        completions: m.completions,
+        avgHours,
+        issues: m.issues,
+        issueRate: (m.completions + m.issues) ? m.issues / (m.completions + m.issues) : 0,
+        fastestStage: stageBreakdown[0] || null,
+        slowestStage: stageBreakdown[stageBreakdown.length - 1] || null,
+        stageBreakdown,
+      };
+    })
+    .filter(x => x.completions > 0)
+    .sort((a, b) => a.avgHours - b.avgHours); // fastest first
+
+    res.json({ ok: true, members });
+  } catch (e) {
+    console.error("memberSpeedStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
+
 
 
 
