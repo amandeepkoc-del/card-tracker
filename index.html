@@ -5160,56 +5160,17 @@
             >
               <option value="">— all members —</option>
               {memberStats.filter(m => m.id !== myMemberId).map(m => (
-                <option key={m.id} value={m.id}>
-                  {m.name} · {m.assigned} cards · {m.completedTasks}/{m.totalTasks} stages done · {m.pending} pending
-                </option>
+                <option key={m.id} value={m.id}>{m.name}</option>
               ))}
             </select>
-            {filterMember && (() => {
-              const ms = memberStats.find(m => m.id === filterMember);
-              if (!ms) return null;
-              return (
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
-                    {ms.assigned} cards assigned
-                  </span>
-                  <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
-                    ✓ {ms.completedTasks}/{ms.totalTasks} stages done
-                  </span>
-                  <span style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
-                    ⏳ {ms.pending} cards pending
-                  </span>
-                  {ms.issueTasks > 0 && (
-                    <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", border: "1px solid var(--rose)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
-                      ⚠ {ms.issueTasks} issues
-                    </span>
-                  )}
-                  <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFilterMember(""); setPage(1); }}>
-                    Clear
-                  </button>
-                </div>
-              );
-            })()}
+            {filterMember && (
+              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFilterMember(""); setPage(1); }}>
+                Clear
+              </button>
+            )}
           </div>
         )}
-        {filterMember && selectedMemberStageBreakdown && selectedMemberStageBreakdown.perStage.length > 0 && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 8 }}>
-              {selectedMemberStageBreakdown.memberName}'s stages — done / pending / issue
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {selectedMemberStageBreakdown.perStage.map(s => (
-                <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 10, padding: "10px 14px" }}>
-                  <b style={{ fontSize: 13, minWidth: 140 }}>{s.name}</b>
-                  <span style={{ background: "#F0EEE8", color: "#8C887E", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>○ Not Started: {s.notStarted}</span>
-                  <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>… In Progress: {s.inProgress}</span>
-                  <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>✓ Completed: {s.completed}</span>
-                  <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>⚠ Issue: {s.issue}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        
         {showFilters && (
           <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: 14, marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}>
 
@@ -8233,17 +8194,18 @@ const filtered = useMemo(() => {
                           {eligibleStages.map(s => {
                             const sg = p.stages[s.k];
                             const isQcFlagged = sg.status === "In Progress" && String(sg.comments || "").startsWith("QC flagged:");
-                            const c = (sg.status === "Issue" || isQcFlagged) ? { bg: "var(--rose-bg)", border: "var(--rose)", ink: "var(--rose-ink)", icon: "⚠" }
+                            const c = sg.skipped ? { bg: "#F0EEE8", border: "var(--line2)", ink: "var(--muted)", icon: "⊘" }
+                              : (sg.status === "Issue" || isQcFlagged) ? { bg: "var(--rose-bg)", border: "var(--rose)", ink: "var(--rose-ink)", icon: "⚠" }
                               : sg.status === "Completed" ? { bg: "var(--sage-bg)", border: "var(--sage)", ink: "var(--sage-ink)", icon: "✓" }
                                 : sg.status === "In Progress" ? { bg: "var(--sky-bg)", border: "var(--sky)", ink: "var(--sky-ink)", icon: "…" }
                                   : { bg: "#F0EEE8", border: "var(--line2)", ink: "var(--muted)", icon: "○" };
                             return (
                               <span key={s.k} style={{
                                 display: "inline-flex", alignItems: "center", gap: 5, background: c.bg,
-                                border: `${(sg.status === "Issue" || isQcFlagged) ? 2 : 1}px solid ${c.border}`,
+                                border: `${(!sg.skipped && (sg.status === "Issue" || isQcFlagged)) ? 2 : 1}px solid ${c.border}`,
                                 color: c.ink, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700
-                              }} title={isQcFlagged ? sg.comments.replace(/^QC flagged:\s*/, "") : undefined}>
-                                {c.icon} {s.n}{sg.person ? ` · ${sg.person}` : ""}
+                              }} title={sg.skipped ? "Marked Not Required" : isQcFlagged ? sg.comments.replace(/^QC flagged:\s*/, "") : undefined}>
+                                {c.icon} {s.n}{sg.skipped ? " (N/A)" : sg.person ? ` · ${sg.person}` : ""}
                               </span>
                             );
                           })}
