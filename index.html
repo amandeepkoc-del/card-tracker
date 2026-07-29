@@ -2360,7 +2360,7 @@
             {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
             {tab === "qcaudit" && <QCAuditTab division={division} products={divProducts} qcAuditLog={qcAuditLog} onSubmit={submitQCAudit} operator={operator} auth={auth} initialFilter={qcAuditFilter} onFilterConsumed={() => setQcAuditFilter(null)} />}
             {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
-            {tab === "analytics" && <SpeedAnalytics division={division} />}
+            {tab === "analytics" && <SpeedAnalytics division={division} audit={audit.filter(a => a.division === division)} />}
           </div>
         </main>
       </div>
@@ -2434,6 +2434,7 @@
     const [fStageStatus, setFStageStatus] = useState("");
     const [nlQuery, setNlQuery] = useState("");
     const [fEventDate, setFEventDate] = useState("");
+    const [drill, setDrill] = useState(null); // { stageKey, stageName, status }
     const [dashFromDate, setDashFromDate] = useState("");
     const [dashToDate, setDashToDate] = useState("");  
     const todayStr = new Date().toISOString().split("T")[0];
@@ -3074,6 +3075,21 @@
       return map;
     }, [audit, fEventDate, division, isMasterOrAdminView, auth]);
 
+    const STATUS_TO_DATEKEY = { "In Progress": "inProgress", "Completed": "completed", "Issue": "issue" };
+    const drillCards = useMemo(() => {
+      if (!drill) return [];
+      if (fEventDate && dateScopedStageStats) {
+        const dateKey = STATUS_TO_DATEKEY[drill.status];
+        if (!dateKey) return [];
+        const skus = dateScopedStageStats[drill.stageKey]?.skus?.[dateKey] || [];
+        const pool = allDivProducts || products;
+        return [...new Set(skus)].map(sku => pool.find(p => p.sku === sku)).filter(Boolean);
+      }
+      // Live mode — respects every filter already applied (vendor, set no,
+      // member, etc.) since it's scoped from filteredProducts.
+      return filteredProducts.filter(p => (p.stages?.[drill.stageKey]?.status || "Not Started") === drill.status);
+    }, [drill, fEventDate, dateScopedStageStats, filteredProducts, allDivProducts, products]);
+
 
     const hasScopeFilter = !!(fVendor || fSetNo);
 
@@ -3668,25 +3684,20 @@
                     // that day (from the audit log), not the current live state.
                     if (fEventDate && dateScopedStageStats) {
                       const ds = dateScopedStageStats[s.k] || { inProgress: 0, completed: 0, issue: 0 };
+                      const isDrillActive = (status) => drill && drill.stageKey === s.k && drill.status === status;
+                      const cellBtn = (count, status, bg, ink) => count > 0 ? (
+                        <button onClick={() => setDrill(isDrillActive(status) ? null : { stageKey: s.k, stageName: s.n, status })}
+                          style={{ background: bg, color: ink, borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12, border: isDrillActive(status) ? `2px solid ${ink}` : "1px solid transparent", cursor: "pointer" }}>
+                          {count}
+                        </button>
+                      ) : <span style={{ color: "var(--faint)" }}>—</span>;
                       return (
                         <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
                           <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
                           <td style={{ textAlign: "center", padding: "10px 10px" }}><span style={{ color: "var(--faint)" }}>—</span></td>
-                          <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                            {ds.inProgress > 0
-                              ? <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{ds.inProgress}</span>
-                              : <span style={{ color: "var(--faint)" }}>—</span>}
-                          </td>
-                          <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                            {ds.completed > 0
-                              ? <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{ds.completed}</span>
-                              : <span style={{ color: "var(--faint)" }}>—</span>}
-                          </td>
-                          <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                            {ds.issue > 0
-                              ? <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{ds.issue}</span>
-                              : <span style={{ color: "var(--faint)" }}>—</span>}
-                          </td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(ds.inProgress, "In Progress", "var(--sky-bg)", "var(--sky-ink)")}</td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(ds.completed, "Completed", "var(--sage-bg)", "var(--sage-ink)")}</td>
+                          <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(ds.issue, "Issue", "var(--rose-bg)", "var(--rose-ink)")}</td>
                         </tr>
                       );
                     }
@@ -3718,26 +3729,23 @@
                             );
                           })()}
                         </td>
-                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                          {notStarted > 0
-                            ? <span style={{ background: "#F0EEE8", color: "#8C887E", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{notStarted}</span>
-                            : <span style={{ color: "var(--faint)" }}>—</span>}
-                        </td>
-                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                          {inProgress > 0
-                            ? <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{inProgress}</span>
-                            : <span style={{ color: "var(--faint)" }}>—</span>}
-                        </td>
-                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                          {completed > 0
-                            ? <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{completed}</span>
-                            : <span style={{ color: "var(--faint)" }}>—</span>}
-                        </td>
-                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                          {issue > 0
-                            ? <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{issue}</span>
-                            : <span style={{ color: "var(--faint)" }}>—</span>}
-                        </td>
+                        {(() => {
+                          const isDrillActive = (status) => drill && drill.stageKey === s.k && drill.status === status;
+                          const cellBtn = (count, status, bg, ink) => count > 0 ? (
+                            <button onClick={() => setDrill(isDrillActive(status) ? null : { stageKey: s.k, stageName: s.n, status })}
+                              style={{ background: bg, color: ink, borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12, border: isDrillActive(status) ? `2px solid ${ink}` : "1px solid transparent", cursor: "pointer" }}>
+                              {count}
+                            </button>
+                          ) : <span style={{ color: "var(--faint)" }}>—</span>;
+                          return (
+                            <>
+                              <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(notStarted, "Not Started", "#F0EEE8", "#8C887E")}</td>
+                              <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(inProgress, "In Progress", "var(--sky-bg)", "var(--sky-ink)")}</td>
+                              <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(completed, "Completed", "var(--sage-bg)", "var(--sage-ink)")}</td>
+                              <td style={{ textAlign: "center", padding: "10px 10px" }}>{cellBtn(issue, "Issue", "var(--rose-bg)", "var(--rose-ink)")}</td>
+                            </>
+                          );
+                        })()}
                       </tr>
                     );
                   })}
@@ -3762,6 +3770,41 @@
                 </tbody>
               </table>
             </div>
+
+            {drill && (
+              <div style={{ marginTop: 16, background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 12, padding: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13, color: "var(--sky-ink)" }}>{drill.stageName} · {drill.status}</b>
+                  <span style={{ fontSize: 11.5, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 999, padding: "2px 10px", fontWeight: 600 }}>
+                    {drillCards.length} card{drillCards.length !== 1 ? "s" : ""}
+                  </span>
+                  {fEventDate && <span className="tag">on {fEventDate}</span>}
+                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11, marginLeft: "auto" }} onClick={() => setDrill(null)}>✕ Close</button>
+                </div>
+                {drillCards.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--faint)" }}>No cards found.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 300, overflowY: "auto" }}>
+                    {drillCards.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => goProducts && goProducts({ assignTab: "assigned", search: p.sku })}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
+                          background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9,
+                          cursor: "pointer", textAlign: "left", fontSize: 12.5
+                        }}
+                      >
+                        <span className="psku">{p.sku}</span>
+                        {p.name && <span style={{ fontWeight: 600 }}>{p.name}</span>}
+                        <span className="tag">· {p.vendor || "—"}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--sky-ink)", fontWeight: 700 }}>View in Products →</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {hasFilters && (
               <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
@@ -4187,6 +4230,7 @@
     const [fEventFrom, setFEventFrom] = useState("");
     const [fEventTo, setFEventTo] = useState("");
     const [fVendor, setFVendor] = useState("");
+    const [fCompletion, setFCompletion] = useState(""); 
     const [fStage, setFStage] = useState("");
     const [fStageStatus, setFStageStatus] = useState("");
     const [fHasIssue, setFHasIssue] = useState(false);
@@ -4199,15 +4243,24 @@
     if (initialFilter.assignTab) { setAssignTab(initialFilter.assignTab); setShowFilters(true); }
     setFHasIssue(!!initialFilter.fHasIssue);
     setFQcVerdict(initialFilter.fQcVerdict || "");
+    if (initialFilter.search) setQ(initialFilter.search);
     setPage(1);
     onFilterConsumed && onFilterConsumed();
   }, [initialFilter]);
+
+  // Auto-expand the searched product's row once it's found — lands the
+  // user directly on the open card when arriving from an Overview drill-down.
+  useEffect(() => {
+    if (!q) return;
+    const match = products.find(p => p.sku.toLowerCase() === q.trim().toLowerCase());
+    if (match) setOpen(o => (o[match.id] ? o : { ...o, [match.id]: true }));
+  }, [q, products]);
     const filterableStages = STAGES.filter(s => s.k !== "finalqc");
     const activeFilterCount = [fStatus, fVendor, fStage && fStageStatus, fHasIssue, fStalledDays, fQcVerdict, fSetNo, filterMember, fAssignee, fEventType && (fEventFrom || fEventTo)].filter(Boolean).length;
     const clearAllFilters = () => {
       setFStatus(""); setFVendor(""); setFStage(""); setFStageStatus(""); setFHasIssue(false);
       setFStalledDays(""); setFQcVerdict(""); setFSetNo(""); setFilterMember(""); setFAssignee("");
-      setFEventType(""); setFEventFrom(""); setFEventTo("");
+      setFEventType(""); setFEventFrom(""); setFEventTo(""); setFCompletion("");
       setSortBy("recent"); setPage(1);
     };
     // const [showFilters, setShowFilters] = useState(false);
@@ -4563,6 +4616,77 @@
       return false;
     };
 
+    // ---- Unified card classifier used for the tab counts below ----
+    // Returns "notassigned" | "completed" | "pending" | "issue" for a card,
+    // optionally scoped to one member (scopeMemberId), so the same logic that
+    // decides which list a card shows up in also decides its count.
+    const classifyCard = useCallback((p, scopeMemberId) => {
+      if (hasAssignAccess) {
+        const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
+        if (!isAssigned) return "notassigned";
+        const relevantAssignments = scopeMemberId
+          ? assignments.filter(a => a.memberId === scopeMemberId)
+          : (isMasterOrAdmin ? assignments : assignments.filter(a => a.memberId === myMemberId));
+        const cardAssignments = relevantAssignments.filter(
+          a => a.division === division && a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+        );
+        if (cardAssignments.length === 0) return "notassigned";
+        const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
+        const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
+        const stagesDone = stagesToCheck.every(a => {
+          const stageKey = a.stage;
+          if (!stageKey || stageKey === "all") return productState(p) === "done";
+          return p.stages?.[stageKey]?.status === "Completed";
+        });
+        const isMasterOverallView = isMasterOrAdmin && !scopeMemberId;
+        const isFullyApproved = isMasterOverallView ? (stagesDone && p.verdict === "Approved") : stagesDone;
+        const scopeStageKeys = stagesToCheck.map(a => a.stage).filter(k => k && k !== "all");
+        const scopedHasIssue = isMasterOverallView
+          ? cardHasOpenIssue(p)
+          : cardHasOpenIssueInStages(p, scopeStageKeys.length > 0 ? scopeStageKeys : eligibleStagesForIssueCheck.map(s => s.k));
+        if (scopedHasIssue) return "issue";
+        return isFullyApproved ? "completed" : "pending";
+      } else if (myMemberId) {
+        const cardAssignments = assignments.filter(a =>
+          a.division === division && a.memberId === myMemberId && a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+        );
+        if (cardAssignments.length === 0) return "notassigned";
+        if (cardHasOpenIssue(p)) return "issue";
+        const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
+        const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
+        const stagesDone = stagesToCheck.every(a =>
+          (!a.stage || a.stage === "all") ? productState(p) === "done" : p.stages?.[a.stage]?.status === "Completed"
+        );
+        return stagesDone ? "completed" : "pending";
+      }
+      return "notassigned";
+    }, [hasAssignAccess, isMasterOrAdmin, myMemberId, assignments, division, skuAssignedTo, cardHasOpenIssue, cardHasOpenIssueInStages, eligibleStagesForIssueCheck]);
+
+    // Pool the counts are computed from — same pool the list uses, pre-filtered
+    // by vendor / set no. so every number matches what clicking that tab shows.
+    const countsPool = useMemo(() => {
+      return sourceProducts.filter(p =>
+        (!fVendor || (p.vendor || "").trim() === fVendor) &&
+        (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase())
+      );
+    }, [sourceProducts, fVendor, fSetNo]);
+
+    const tabCounts = useMemo(() => {
+      const scopeMemberId = filterMember || null;
+      const counts = { notassigned: 0, assigned: 0, completed: 0, pending: 0, issue: 0 };
+      countsPool.forEach(p => {
+        const bucket = classifyCard(p, scopeMemberId);
+        if (bucket === "notassigned") counts.notassigned++;
+        else {
+          counts.assigned++;
+          if (bucket === "completed") counts.completed++;
+          else if (bucket === "pending") counts.pending++;
+          else if (bucket === "issue") counts.issue++;
+        }
+      });
+      return counts;
+    }, [countsPool, classifyCard, filterMember]);
+
     // Total number of *individual* flagged issues on a card — a card can carry
     // more than one stage issue at once. Everywhere we show an "Issues" count,
     // we should sum these instances, not count distinct cards. This mirrors
@@ -4749,7 +4873,27 @@
       }
       if (fQcVerdict === "pending" && p.verdict) return false;
       if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
-      if (fQcVerdict === "issues" && p.verdict !== "Issues Found") return false;
+      
+      // New: independent Completed/Pending dropdown — works whether or not
+      // a member is selected, and doesn't touch assignTab's own logic at all.
+      if (fCompletion) {
+        const scopeMemberId = filterMember || (!isMasterOrAdmin ? myMemberId : null);
+        const relevantAssignments = scopeMemberId
+          ? assignments.filter(a => a.memberId === scopeMemberId && a.division === division)
+          : assignments.filter(a => a.division === division);
+        const cardAssignments = relevantAssignments.filter(
+          a => a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+        );
+        if (cardAssignments.length === 0) return false; // not assigned in this scope at all
+        const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
+        const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
+        const stagesDone = stagesToCheck.every(a =>
+          (!a.stage || a.stage === "all") ? productState(p) === "done" : p.stages?.[a.stage]?.status === "Completed"
+        );
+        const isDone = (isMasterOrAdmin && !scopeMemberId) ? (stagesDone && p.verdict === "Approved") : stagesDone;
+        if (fCompletion === "completed" && !isDone) return false;
+        if (fCompletion === "pending" && isDone) return false;
+      }
       if (hasAssignAccess) {
         const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
         if (assignTab === "notassigned" && isAssigned) return false;
@@ -5181,6 +5325,13 @@
                   {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </label>
+              <label className="fld" style={{ minWidth: 170 }}>Completion status
+                <select value={fCompletion} onChange={e => { setFCompletion(e.target.value); setPage(1); }}>
+                  <option value="">— any —</option>
+                  <option value="completed">✓ Completed</option>
+                  <option value="pending">⏳ Pending</option>
+                </select>
+              </label>
 
               {assigneeOptions.length > 0 && (
                 <label className="fld" style={{ minWidth: 170 }}>Assigned to
@@ -5234,6 +5385,23 @@
             </div>
           </div>
         )}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{
+            background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)",
+            borderRadius: 999, padding: "4px 14px", fontWeight: 700, fontSize: 13
+          }}>
+            {filtered.length} card{filtered.length !== 1 ? "s" : ""}
+          </span>
+          {(fCompletion || filterMember) && (
+            <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
+              {filterMember ? `for ${teamMembers.find(m => m.id === filterMember)?.name || "selected member"}` : ""}
+              {fCompletion ? ` · ${fCompletion === "completed" ? "Completed" : "Pending"}` : ""}
+            </span>
+          )}
+        </div>
+
+        
         <div className="toolbar">
           <div className="search" style={{ position: "relative" }}>
             {I.search({})}
@@ -7454,72 +7622,297 @@
     );
   }
 
-  function SpeedAnalytics({ division }) {
-      const [stats, setStats] = useState(null);
-      const [loading, setLoading] = useState(true);
-      const canvasRef = useRef(null);
-      const chartRef = useRef(null);
+  function localDateKey(d) {
+    const yr = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+    return `${yr}-${mo}-${day}`;
+  }
+  function fmtDay(dateKey) {
+    const d = new Date(dateKey + "T00:00:00");
+    return d.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
+  }
 
-      useEffect(() => {
-        setLoading(true);
-        fetch(`${API}/api/stageSpeedStats?division=${encodeURIComponent(division)}`)
-          .then(r => r.json())
-          .then(data => { if (data.ok) setStats(data.stats); setLoading(false); })
-          .catch(e => { console.error("stageSpeedStats fetch failed", e); setLoading(false); });
-      }, [division]);
+  function SpeedAnalytics({ division, audit }) {
+    const [stats, setStats] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const canvasRef = useRef(null);
+    const chartRef = useRef(null);
 
-      useEffect(() => {
-        if (!stats || !canvasRef.current || typeof Chart === "undefined") return;
-        if (chartRef.current) chartRef.current.destroy();
-        chartRef.current = new Chart(canvasRef.current, {
-          type: "bar",
-          data: {
-            labels: stats.map(s => s.stageName),
-            datasets: [{
-              label: "Avg hours to complete",
-              data: stats.map(s => Math.round(s.avgHours * 10) / 10),
-              backgroundColor: stats.map(s => s.avgHours > (stats.reduce((a,b)=>a+b.avgHours,0)/stats.length) ? "#D89F9F" : "#9CBE9A"),
-              borderRadius: 6,
-            }]
+    useEffect(() => {
+      setLoading(true);
+      fetch(`${API}/api/stageSpeedStats?division=${encodeURIComponent(division)}`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) setStats(data.stats); setLoading(false); })
+        .catch(e => { console.error("stageSpeedStats fetch failed", e); setLoading(false); });
+    }, [division]);
+
+    useEffect(() => {
+      if (!stats || !canvasRef.current || typeof Chart === "undefined") return;
+      if (chartRef.current) chartRef.current.destroy();
+      chartRef.current = new Chart(canvasRef.current, {
+        type: "bar",
+        data: {
+          labels: stats.map(s => s.stageName),
+          datasets: [{
+            label: "Avg hours to complete",
+            data: stats.map(s => Math.round(s.avgHours * 10) / 10),
+            backgroundColor: stats.map(s => s.avgHours > (stats.reduce((a,b)=>a+b.avgHours,0)/stats.length) ? "#D89F9F" : "#9CBE9A"),
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          indexAxis: "y",
+          plugins: { legend: { display: false } },
+          scales: { x: { title: { display: true, text: "Hours" } } }
+        }
+      });
+      return () => { if (chartRef.current) chartRef.current.destroy(); };
+    }, [stats]);
+
+    // ================= NEW: Daily activity / stage breakdown =================
+    const [rangePreset, setRangePreset] = useState("30d"); // "7d" | "30d" | "thismonth" | "all" | "custom"
+    const [customFrom, setCustomFrom] = useState("");
+    const [customTo, setCustomTo] = useState("");
+    const [selectedDay, setSelectedDay] = useState(null);
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    const { rangeFrom, rangeTo } = useMemo(() => {
+      const to = new Date(); to.setHours(23, 59, 59, 999);
+      let from = new Date();
+      if (rangePreset === "7d") { from.setDate(from.getDate() - 6); from.setHours(0, 0, 0, 0); }
+      else if (rangePreset === "30d") { from.setDate(from.getDate() - 29); from.setHours(0, 0, 0, 0); }
+      else if (rangePreset === "thismonth") { from = new Date(to.getFullYear(), to.getMonth(), 1); }
+      else if (rangePreset === "all") { from = new Date(2000, 0, 1); }
+      else if (rangePreset === "custom") {
+        const f = customFrom ? new Date(customFrom + "T00:00:00") : new Date(2000, 0, 1);
+        const t = customTo ? new Date(customTo + "T23:59:59.999") : to;
+        return { rangeFrom: f, rangeTo: t };
+      }
+      return { rangeFrom: from, rangeTo: to };
+    }, [rangePreset, customFrom, customTo]);
+
+    // Parse every "Stage update" audit row within the selected range
+    const completedRows = useMemo(() => {
+      const rows = [];
+      (audit || []).forEach(a => {
+        if (a.action !== "Stage update") return;
+        const d = new Date(a.at);
+        if (isNaN(d.getTime()) || d < rangeFrom || d > rangeTo) return;
+        const m = String(a.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+        if (!m || m[2].trim() !== "Completed") return;
+        const person = (m[3] || "").trim() || (a.actor || "").trim() || "—";
+        rows.push({ dateKey: localDateKey(d), stageName: m[1].trim(), person, sku: a.entity });
+      });
+      return rows;
+    }, [audit, rangeFrom, rangeTo]);
+
+    const dailyStats = useMemo(() => {
+      const byDate = {};
+      completedRows.forEach(r => {
+        if (!byDate[r.dateKey]) byDate[r.dateKey] = { total: 0, byStage: {}, byPerson: {} };
+        byDate[r.dateKey].total++;
+        byDate[r.dateKey].byStage[r.stageName] = (byDate[r.dateKey].byStage[r.stageName] || 0) + 1;
+        byDate[r.dateKey].byPerson[r.person] = (byDate[r.dateKey].byPerson[r.person] || 0) + 1;
+      });
+      return byDate;
+    }, [completedRows]);
+
+    const sortedDates = useMemo(() => Object.keys(dailyStats).sort(), [dailyStats]);
+
+    const busiestDate = useMemo(() => {
+      let best = null;
+      sortedDates.forEach(d => { if (!best || dailyStats[d].total > dailyStats[best].total) best = d; });
+      return best;
+    }, [sortedDates, dailyStats]);
+
+    const busiestDayTopStage = useMemo(() => {
+      if (!busiestDate) return null;
+      return Object.entries(dailyStats[busiestDate].byStage).sort((a, b) => b[1] - a[1])[0] || null;
+    }, [busiestDate, dailyStats]);
+
+    const busiestDayTopPerson = useMemo(() => {
+      if (!busiestDate) return null;
+      return Object.entries(dailyStats[busiestDate].byPerson).sort((a, b) => b[1] - a[1])[0] || null;
+    }, [busiestDate, dailyStats]);
+
+    const stageTotals = useMemo(() => {
+      const m = {};
+      completedRows.forEach(r => { m[r.stageName] = (m[r.stageName] || 0) + 1; });
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    }, [completedRows]);
+    const topStageOverall = stageTotals[0] || null;
+
+    const dailyCanvasRef = useRef(null);
+    const dailyChartRef = useRef(null);
+
+    useEffect(() => {
+      if (!dailyCanvasRef.current || typeof Chart === "undefined") return;
+      if (dailyChartRef.current) dailyChartRef.current.destroy();
+      if (sortedDates.length === 0) return;
+
+      // Single line = total cards completed per day. Busiest day gets a
+      // bigger, highlighted point so it's obvious at a glance.
+      const totals = sortedDates.map(d => dailyStats[d].total);
+      const maxTotal = Math.max(...totals);
+      const pointColors = totals.map(t => t === maxTotal ? "#D89F9F" : "#7FA67D");
+      const pointRadii = totals.map(t => t === maxTotal ? 7 : 4);
+
+      dailyChartRef.current = new Chart(dailyCanvasRef.current, {
+        type: "line",
+        data: {
+          labels: sortedDates.map(d => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })),
+          datasets: [{
+            label: "Cards completed",
+            data: totals,
+            borderColor: "#9CBE9A",
+            backgroundColor: "rgba(156,190,154,0.15)",
+            fill: true,
+            tension: 0.3,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: pointColors,
+            pointRadius: pointRadii,
+            pointHoverRadius: pointRadii.map(r => r + 2),
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: "Cards completed" }, ticks: { precision: 0 } }
           },
-          options: {
-            indexAxis: "y",
-            plugins: { legend: { display: false } },
-            scales: { x: { title: { display: true, text: "Hours" } } }
-          }
-        });
-        return () => { if (chartRef.current) chartRef.current.destroy(); };
-      }, [stats]);
+          onClick: (evt, elements) => { if (elements.length > 0) setSelectedDay(sortedDates[elements[0].index]); }
+        }
+      });
+      return () => { if (dailyChartRef.current) dailyChartRef.current.destroy(); };
+    }, [sortedDates, dailyStats]);
+    // ============================================================================
 
-      if (loading) return <div className="card empty">Loading speed data…</div>;
-      if (!stats || stats.length === 0) return <div className="card empty">Not enough completed stages yet to compute speed.</div>;
+    if (loading) return <div className="card empty">Loading speed data…</div>;
 
-      const fastest = stats[0], slowest = stats[stats.length - 1];
+    return (
+      <div>
+        {(!stats || stats.length === 0) ? (
+          <div className="card empty">Not enough completed stages yet to compute stage speed.</div>
+        ) : (() => {
+          const fastest = stats[0], slowest = stats[stats.length - 1];
+          return (
+            <>
+              <div className="note">Average time from when a stage is marked "In Progress" to when it's marked "Completed" — based on {division}'s full activity history.</div>
+              <div className="grid kpis" style={{ marginTop: 16 }}>
+                <div className="card kpi">
+                  <div className="lab">Fastest stage</div>
+                  <div className="val" style={{ color: "var(--sage-ink)", fontSize: 22 }}>{fastest.stageName}</div>
+                  <div className="sub">{fastest.avgHours.toFixed(1)} hrs avg · {fastest.sampleCount} samples</div>
+                </div>
+                <div className="card kpi">
+                  <div className="lab">Slowest stage</div>
+                  <div className="val" style={{ color: "var(--rose-ink)", fontSize: 22 }}>{slowest.stageName}</div>
+                  <div className="sub">{slowest.avgHours.toFixed(1)} hrs avg · {slowest.sampleCount} samples</div>
+                </div>
+              </div>
+              <div className="card pad sec">
+                <div className="sec-h"><h3>Stage speed comparison</h3><span className="hint">lower = faster</span></div>
+                <div style={{ height: Math.max(280, stats.length * 40) }}>
+                  <canvas ref={canvasRef} />
+                </div>
+              </div>
+            </>
+          );
+        })()}
 
-      return (
-        <div>
-          <div className="note">Average time from when a stage is marked "In Progress" to when it's marked "Completed" — based on {division}'s full activity history.</div>
-          <div className="grid kpis" style={{ marginTop: 16 }}>
-            <div className="card kpi">
-              <div className="lab">Fastest stage</div>
-              <div className="val" style={{ color: "var(--sage-ink)", fontSize: 22 }}>{fastest.stageName}</div>
-              <div className="sub">{fastest.avgHours.toFixed(1)} hrs avg · {fastest.sampleCount} samples</div>
-            </div>
-            <div className="card kpi">
-              <div className="lab">Slowest stage</div>
-              <div className="val" style={{ color: "var(--rose-ink)", fontSize: 22 }}>{slowest.stageName}</div>
-              <div className="sub">{slowest.avgHours.toFixed(1)} hrs avg · {slowest.sampleCount} samples</div>
+        {/* ================= NEW: Daily activity panel ================= */}
+        <div className="card pad sec">
+          <div className="sec-h" style={{ flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+            <h3>Daily activity — cards completed by day & stage</h3>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {[["7d", "Last 7 days"], ["30d", "Last 30 days"], ["thismonth", "This month"], ["all", "All time"], ["custom", "Custom range"]].map(([k, label]) => (
+                <button key={k} onClick={() => setRangePreset(k)} style={{
+                  padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  background: rangePreset === k ? "var(--ink)" : "var(--card)",
+                  color: rangePreset === k ? "#fff" : "var(--ink)",
+                  border: `1px solid ${rangePreset === k ? "var(--ink)" : "var(--line2)"}`
+                }}>{label}</button>
+              ))}
+              {rangePreset === "custom" && (
+                <>
+                  <input type="date" value={customFrom} max={todayStr} onChange={e => setCustomFrom(e.target.value)}
+                    style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", fontSize: 12 }} />
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>to</span>
+                  <input type="date" value={customTo} max={todayStr} onChange={e => setCustomTo(e.target.value)}
+                    style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", fontSize: 12 }} />
+                </>
+              )}
             </div>
           </div>
-          <div className="card pad sec">
-            <div className="sec-h"><h3>Stage speed comparison</h3><span className="hint">lower = faster</span></div>
-            <div style={{ height: Math.max(280, stats.length * 40) }}>
-              <canvas ref={canvasRef} />
-            </div>
-          </div>
+
+          {completedRows.length === 0 ? (
+            <div className="empty">No completed cards in this range.</div>
+          ) : (
+            <>
+              <div className="grid kpis" style={{ marginTop: 4, marginBottom: 18 }}>
+                <div className="card kpi">
+                  <div className="lab">Busiest day</div>
+                  <div className="val" style={{ fontSize: 19 }}>{busiestDate ? fmtDay(busiestDate) : "—"}</div>
+                  <div className="sub">{busiestDate ? `${dailyStats[busiestDate].total} cards completed` : ""}</div>
+                </div>
+                <div className="card kpi">
+                  <div className="lab">Top stage that day</div>
+                  <div className="val" style={{ fontSize: 20, color: "var(--sky-ink)" }}>{busiestDayTopStage ? busiestDayTopStage[0] : "—"}</div>
+                  <div className="sub">{busiestDayTopStage ? `${busiestDayTopStage[1]} cards` : ""}</div>
+                </div>
+                <div className="card kpi">
+                  <div className="lab">Top performer that day</div>
+                  <div className="val" style={{ fontSize: 20, color: "var(--sage-ink)" }}>{busiestDayTopPerson ? busiestDayTopPerson[0] : "—"}</div>
+                  <div className="sub">{busiestDayTopPerson ? `${busiestDayTopPerson[1]} cards` : ""}</div>
+                </div>
+                <div className="card kpi">
+                  <div className="lab">Top stage overall (range)</div>
+                  <div className="val" style={{ fontSize: 20, color: "var(--peach-ink)" }}>{topStageOverall ? topStageOverall[0] : "—"}</div>
+                  <div className="sub">{topStageOverall ? `${topStageOverall[1]} cards in range` : ""}</div>
+                </div>
+                <div className="card kpi">
+                  <div className="lab">Total completed (range)</div>
+                  <div className="val">{completedRows.length}</div>
+                  <div className="sub">across {sortedDates.length} day(s)</div>
+                </div>
+              </div>
+
+              <div style={{ height: 300 }}>
+                <canvas ref={dailyCanvasRef} />
+              </div>
+              <div className="tag" style={{ marginTop: 8 }}>Click a bar to see that day's full breakdown below.</div>
+
+              {selectedDay && dailyStats[selectedDay] && (
+                <div style={{ marginTop: 16, background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 12, padding: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                    <b style={{ color: "var(--sky-ink)" }}>{fmtDay(selectedDay)}</b>
+                    <span className="tag">{dailyStats[selectedDay].total} cards completed</span>
+                    <button className="ghost" style={{ marginLeft: "auto", padding: "5px 10px", fontSize: 11 }} onClick={() => setSelectedDay(null)}>✕ Close</button>
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>By stage / department</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                    {Object.entries(dailyStats[selectedDay].byStage).sort((a, b) => b[1] - a[1]).map(([stageName, count]) => (
+                      <span key={stageName} style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 12px", fontSize: 12.5, fontWeight: 600 }}>
+                        {stageName}: {count}
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>By person</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {Object.entries(dailyStats[selectedDay].byPerson).sort((a, b) => b[1] - a[1]).map(([person, count]) => (
+                      <span key={person} style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>
+                        {person}: {count}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
   function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth, initialFilter = null, onFilterConsumed }) {
     const [q, setQ] = useState("");
