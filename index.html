@@ -1706,6 +1706,8 @@
   function Chip({ status }) { return <span className={"chip " + statusClass(status)}><span className="dot" />{status}</span>; }
   function Bar({ pct }) { return <div className="bar"><i style={{ width: pct + "%" }} /></div>; }
   function Pipe({ p }) { return <div className="pipe">{STAGES.map(s => <span key={s.k} className={pipeClass(p.stages[s.k].status)} title={s.n + ": " + p.stages[s.k].status} />)}</div>; }
+
+
   function Donut({ segments, size = 148, thick = 20, centerTop, centerBot }) {
     const r = (size - thick) / 2, c = size / 2, circ = 2 * Math.PI * r, total = segments.reduce((a, s) => a + s.value, 0);
     let off = 0;
@@ -1715,6 +1717,41 @@
       <text x={c} y={c - 1} textAnchor="middle" style={{ fontFamily: "var(--serif)", fontSize: 30, fontWeight: 600, fill: "var(--ink)" }}>{centerTop}</text>
       <text x={c} y={c + 17} textAnchor="middle" style={{ fontSize: 9.5, fill: "var(--muted)", letterSpacing: 1, textTransform: "uppercase" }}>{centerBot}</text>
     </svg>);
+  }
+
+  function CopySku({ sku, className, style, onClick }) {
+    const [copied, setCopied] = useState(false);
+    if (!sku) return <span className={className || "psku"} style={style}>no-sku</span>;
+    return (
+      <span
+        className={className || "psku"}
+        style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: onClick ? "pointer" : "default", ...style }}
+        onClick={onClick}
+      >
+        {sku}
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(sku);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          title="Copy SKU"
+          style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 16, height: 16, padding: 0, border: 0, background: "none",
+            color: copied ? "var(--sage-ink)" : "var(--faint)", cursor: "pointer", flexShrink: 0
+          }}
+        >
+          {copied ? "✓" : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          )}
+        </button>
+      </span>
+    );
   }
 
   /* ============================================================= */
@@ -3795,7 +3832,7 @@
                           cursor: "pointer", textAlign: "left", fontSize: 12.5
                         }}
                       >
-                        <span className="psku">{p.sku}</span>
+                        <CopySku sku={p.sku} />
                         {p.name && <span style={{ fontWeight: 600 }}>{p.name}</span>}
                         <span className="tag">· {p.vendor || "—"}</span>
                         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--sky-ink)", fontWeight: 700 }}>View in Products →</span>
@@ -3818,7 +3855,7 @@
                     return (
                       <div key={p.id} style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9, padding: "8px 12px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-                          <span className="psku">{p.sku}</span>
+                          <CopySku sku={p.sku} />
                           {p.name && <span style={{ fontSize: 12, fontWeight: 600 }}>{p.name}</span>}
                           <span className="tag">· {p.vendor || "—"}</span>
                         </div>
@@ -5384,7 +5421,7 @@
                         onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}>
                         {/* Row 1: SKU, name, vendor, set_no */}
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                          <CopySku sku={p.sku} style={{ flexShrink: 0 }} />
                           {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
                           {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
                           {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
@@ -5583,7 +5620,7 @@
         <div className="phead" style={{ background: selected ? "var(--sky-bg)" : "" }}>
           <input type="checkbox" checked={selected} onChange={e => { e.stopPropagation(); onSelect(); }} onClick={e => e.stopPropagation()} style={{ width: 15, height: 15, accentColor: "var(--sky-ink)", cursor: "pointer", flexShrink: 0 }} />
           <span className={"chev " + (open ? "open" : "")} onClick={toggle}>▶</span>
-          <span className="psku" onClick={toggle} style={{ cursor: "pointer" }}>{p.sku || "no-sku"}</span>
+          <CopySku sku={p.sku} onClick={toggle} />
           {p.name && <span className="pname">{p.name}</span>}
           <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
           {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)" }}>{p.set_no}</span>}
@@ -5910,7 +5947,7 @@
       <div className="prow">
         <div className="phead" onClick={toggle}>
           <span className={"chev " + (open ? "open" : "")}>▶</span>
-          <span className="psku">{p.sku || "no-sku"}</span>{p.name && <span className="pname">{p.name}</span>}<span className="pvend">· {p.vendor || "—"}</span>
+          <CopySku sku={p.sku} />{p.name && <span className="pname">{p.name}</span>}<span className="pvend">· {p.vendor || "—"}</span>
           <div className="spacer" />
           {scan.status === "Completed" ? <span className="chip c-done"><span className="dot" />Scanned</span> : <span className="chip c-app"><span className="dot" />Not scanned</span>}
           {issueCount > 0 && <span className="chip c-issue"><span className="dot" />{issueCount} store issue</span>}
@@ -6252,7 +6289,7 @@
                 {filtered.map(r => (
                   <tr key={r.id} style={{ background: "var(--sage-bg)" }}>
                     <td className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(r.at)}</td>
-                    <td><span className="psku">{r.sku}</span></td>
+                    <td><CopySku sku={r.sku} /></td>
                     <td>
                       <span className="audit-act" style={{ background: "var(--sage)", color: "#fff" }}>
                         ✓ {r.stageName}
@@ -6949,7 +6986,7 @@
                           onMouseEnter={e => { if (!alreadySelected) e.currentTarget.style.background = "var(--card-2)"; }}
                           onMouseLeave={e => { if (!alreadySelected) e.currentTarget.style.background = "var(--card)"; }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                            <CopySku sku={p.sku} style={{ flexShrink: 0 }} />
                             {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
                             {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
                             {alreadySelected && <span style={{ fontSize: 10, fontWeight: 700, color: "var(--sage-ink)", background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 6, padding: "1px 7px" }}>✓ Selected</span>}
@@ -7112,7 +7149,7 @@
                       const recipient = assignableMembers.find(x => x.id === a.memberId);
                       return (
                         <div key={a.id} style={{ display: "flex", flexDirection: "column", gap: 2, background: "var(--card)", border: "1px solid var(--sage)", borderRadius: 8, padding: "5px 10px", fontSize: 11.5 }}>
-                          <span style={{ fontWeight: 700, color: "var(--ink)" }}>{a.sku}{prod?.name ? " · " + prod.name : ""}</span>
+                          <CopySku sku={a.sku} style={{ fontWeight: 700, color: "var(--ink)", background: "transparent", border: 0, padding: 0 }} />{prod?.name ? " · " + prod.name : ""}
                           <span style={{ fontSize: 10, color: "var(--sage-ink)", fontWeight: 600 }}>→ {recipient?.name || "—"}</span>
                         </div>
                       );
@@ -7220,7 +7257,7 @@
                                   <div key={group.sku} style={{ padding: "12px 18px", borderBottom: "1px solid var(--line)", display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
                                     {/* Left: SKU + product info */}
                                     <div style={{ minWidth: 120 }}>
-                                      <span className="psku">{group.sku}</span>
+                                      <CopySku sku={group.sku} />
                                       {group.prod?.name && <div style={{ fontSize: 11.5, color: "var(--ink)", fontWeight: 600, marginTop: 4 }}>{group.prod.name}</div>}
                                       {group.prod?.vendor && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{group.prod.vendor}</div>}
                                     </div>
@@ -8071,7 +8108,7 @@ const filtered = useMemo(() => {
                       onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
                       onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}
                     >
-                      <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                      <CopySku sku={p.sku} style={{ flexShrink: 0 }} />
                       {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
                       {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
                       {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
