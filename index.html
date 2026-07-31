@@ -2881,6 +2881,7 @@
       const pool = allDivProducts || products;
       const list = [];
       pool.forEach(p => {
+        if (p.verdict === "Approved") return; // Approved cards are never "open issues"
         let foundStageFlag = false;
         STAGES.forEach(s => {
           if (s.k === "finalqc") return;
@@ -2934,6 +2935,7 @@
 
       const list = [];
       myFullPool.forEach(p => {
+        if (p.verdict === "Approved") return; // Approved cards are never "open issues"
         const myStages = myStageMap[p.sku.trim().toLowerCase()];
         if (!myStages || myStages.size === 0) return;
         let foundStageFlag = false;
@@ -3030,6 +3032,7 @@
     const issuesList = useMemo(() => {
       const list = [];
       filteredProducts.forEach(p => {
+        if (p.verdict === "Approved") return; // Approved cards are never "open issues"
         STAGES.forEach(s => {
           if (s.k === "finalqc") return;
           const stg = p.stages[s.k];
@@ -4627,6 +4630,7 @@
 
     const eligibleStagesForIssueCheck = STAGES.filter(s => s.k !== "finalqc");
     const cardHasOpenIssue = (p) => {
+      if (p.verdict === "Approved") return false; // Approved cards are never "open issues"
       if (p.verdict === "Issues Found") return true;
       return eligibleStagesForIssueCheck.some(s => {
         const stg = p.stages?.[s.k];
@@ -4645,6 +4649,7 @@
       return stg.status === "Issue" || isQcFlagged;
     };
     const cardHasOpenIssueInStages = (p, stageKeys) => {
+      if (p.verdict === "Approved") return false; // Approved cards are never "open issues"
       if (!stageKeys || stageKeys.length === 0) return false;
       if (stageKeys.some(k => stageHasOpenIssue(p, k))) return true;
       // Verdict says "Issues Found" but no stage was specifically flagged —
@@ -8014,6 +8019,7 @@ const filtered = useMemo(() => {
     // can carry more than one flagged stage at once. This mirrors Overview's
     // divisionIssuesList counting so both screens always agree.
     const countIssueInstances = (p) => {
+      if (p.verdict === "Approved") return 0; // Approved cards are never "open issues"
       let count = 0;
       eligibleStages.forEach(s => {
         const stg = p.stages[s.k];
