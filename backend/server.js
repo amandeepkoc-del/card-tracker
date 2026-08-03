@@ -1408,11 +1408,122 @@ app.get("/api/memberSpeedStats", async (req, res) => {
   }
 });
 
+/* ----------------------------------------------------------------
+   GET /api/teamStageStats?division=...&vendor=&set_no=&dateFrom=&dateTo=&status=
+   Per-member counts of assigned stages, split into Backend team vs
+   Photography & Videography team, with optional filters.
+---------------------------------------------------------------- */
+const TEAM_BACKEND_STAGE_KEYS = ["content", "dimensions", "images", "backend", "website"];
+const TEAM_PHOTO_STAGE_KEYS = ["photography", "photoedit", "videography", "videoedit"];
+
+app.get("/api/teamStageStats", async (req, res) => {
+  const { division, vendor, set_no, dateFrom, dateTo } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
 
 
+    try {
+    const allStageKeys = [...TEAM_BACKEND_STAGE_KEYS, ...TEAM_PHOTO_STAGE_KEYS];
 
+    const { rows: userRows } = await pool.query(
+      `SELECT id, manager_id FROM users`
+    );
+    const managerIdOf = {};
+    userRows.forEach(u => { managerIdOf[u.id] = u.manager_id; });
+    const conditions = ["a.division = $1", "a.stage = ANY($2)"];
+    const params = [division, allStageKeys];
 
+    if (vendor) {
+      params.push(vendor);
+      conditions.push(`p.vendor = $${params.length}`);
+    }
+    if (set_no) {
+      params.push(set_no);
+      conditions.push(`p.set_no = $${params.length}`);
+    }
+    if (dateFrom) {
+      params.push(dateFrom);
+      conditions.push(`a.assigned_at >= $${params.length}`);
+    }
+    if (dateTo) {
+      params.push(dateTo + " 23:59:59");
+      conditions.push(`a.assigned_at <= $${params.length}`);
+    }
+    // NOTE: status is intentionally NOT added to `conditions` — it must not
+    // shrink the row set, or Total Assigned would change with it.
 
+    const { rows } = await pool.query(
+      `SELECT a.member_id, u.name AS member_name, a.stage, a.sku, se.status AS stage_status
+       FROM assignments a
+       JOIN users u ON u.id = a.member_id
+       JOIN products p ON p.id = a.product_id
+       LEFT JOIN stage_entries se ON se.product_id = a.product_id AND se.stage_key = a.stage
+       WHERE ${conditions.join(" AND ")}`,
+      params
+    );
+  const buildGroup = (stageKeys) => {
+    const byMember = {};
+    rows.forEach(r => {
+      if (!stageKeys.includes(r.stage)) return;
+      const acc = (byMember[r.member_id] ||= { memberName: r.member_name, skus: new Set(), skuStage: {} });
+
+      acc.skus.add(r.sku);
+      // Remember status per sku+stage instead of tallying immediately —
+      // we don't yet know which skus will survive the manager/report subtraction.
+      (acc.skuStage[r.sku] ||= {})[r.stage] = r.stage_status;
+    });
+
+    // Subtract reports' skus from their manager's set — same as totalAssigned.
+    Object.keys(byMember).forEach(managerId => {
+      const reportIds = Object.keys(byMember).filter(id => managerIdOf[id] === managerId);
+      if (reportIds.length === 0) return;
+      const managerSkus = byMember[managerId].skus;
+      reportIds.forEach(repId => {
+        byMember[repId].skus.forEach(sku => managerSkus.delete(sku));
+      });
+    });
+
+    return Object.entries(byMember)
+      .map(([memberId, m]) => {
+        const perStage = stageKeys.reduce((o, k) => ({ ...o, [k]: { completed: 0, pending: 0, issue: 0 } }), {});
+        m.skus.forEach(sku => {
+          const stagesForSku = m.skuStage[sku] || {};
+          stageKeys.forEach(stageKey => {
+            if (!(stageKey in stagesForSku)) return;
+            const status = stagesForSku[stageKey];
+            if (status === "Completed") perStage[stageKey].completed++;
+            else if (status === "Issue") perStage[stageKey].issue++;
+            else perStage[stageKey].pending++;
+          });
+        });
+
+        // A stage with zero completed/pending/issue means this member was
+        // never assigned that stage on any of their cards — mark it null so
+        // the frontend can show "—" instead of misleading zeros.
+        stageKeys.forEach(k => {
+          const s = perStage[k];
+          if (s.completed + s.pending + s.issue === 0) perStage[k] = null;
+        });
+
+        return {
+          memberId,
+          memberName: m.memberName,
+          totalAssigned: m.skus.size,
+          perStage,
+        };
+      })
+      .sort((a, b) => b.totalAssigned - a.totalAssigned);
+  };
+
+    res.json({
+      ok: true,
+      backendTeam: buildGroup(TEAM_BACKEND_STAGE_KEYS),
+      photoTeam: buildGroup(TEAM_PHOTO_STAGE_KEYS),
+    });
+  } catch (e) {
+    console.error("teamStageStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 
 app.listen(process.env.PORT, () => {
