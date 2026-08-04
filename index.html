@@ -2563,6 +2563,7 @@
     const [nlQuery, setNlQuery] = useState("");
     const [fEventDate, setFEventDate] = useState("");
     const [drill, setDrill] = useState(null); // { stageKey, stageName, status }
+    const [skuBreakdownSearch, setSkuBreakdownSearch] = useState("");
     const [dashFromDate, setDashFromDate] = useState("");
     const [dashToDate, setDashToDate] = useState("");  
     const todayStr = new Date().toISOString().split("T")[0];
@@ -3092,7 +3093,17 @@
       );
     }, [myFullPool, allDivProducts, products, fVendor, fSetNo, fMember, memberSkuMap, stageStatusMatches]);
     const hasFilters = fVendor || fSetNo || fMember || fStage || fStageStatus || fEventDate;
-
+    const skuBreakdownFiltered = useMemo(() => {
+  const q = skuBreakdownSearch.trim().toLowerCase();
+  if (!q) return filteredProducts;
+  return filteredProducts.filter(p => {
+    if ((p.sku || "").toLowerCase().includes(q)) return true;
+    if ((p.name || "").toLowerCase().includes(q)) return true;
+    if ((p.vendor || "").toLowerCase().includes(q)) return true;
+    const rows = skuStageAssignees[p.sku.trim().toLowerCase()] || [];
+    return rows.some(r => (r.memberName || "").toLowerCase().includes(q));
+  });
+}, [filteredProducts, skuBreakdownSearch, skuStageAssignees]);
     const total = myFullPool.length;
     const useDbForDonut = !fMember && !fVendor && !fSetNo && !isMasterOrAdminView && dbStats;
     const done = useDbForDonut ? Number(dbStats.completed) : filteredProducts.filter(p => isCardCompleteForMe(p)).length;
@@ -3937,13 +3948,29 @@
               </div>
             )}
 
-            {hasFilters && (
+          {hasFilters && (
               <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 8 }}>
-                  Per-SKU breakdown — who's on what ({filteredProducts.length} cards)
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px" }}>
+                    Per-SKU breakdown — who's on what ({skuBreakdownFiltered.length} of {filteredProducts.length} cards)
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      className="txt"
+                      placeholder="Search SKU, name, vendor or assignee…"
+                      value={skuBreakdownSearch}
+                      onChange={e => setSkuBreakdownSearch(e.target.value)}
+                      style={{ fontSize: 11.5, padding: "6px 10px", minWidth: 220 }}
+                    />
+                    {skuBreakdownSearch && (
+                      <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => setSkuBreakdownSearch("")}>
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div style={{ maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
-                  {filteredProducts.slice(0, 60).map(p => {
+                  {skuBreakdownFiltered.slice(0, 60).map(p => {
                     const rows = skuStageAssignees[p.sku.trim().toLowerCase()] || [];
                     const stagesToShow = fStage ? [fStage] : STAGES.filter(s => s.k !== "finalqc").map(s => s.k);
                     return (
@@ -6428,6 +6455,7 @@
     const [selSkus, setSelSkus] = useState([]);
     const [selStages, setSelStages] = useState([]);
     const [expandedMember, setExpandedMember] = useState(null);
+    const [memberSkuSearch, setMemberSkuSearch] = useState("");
     const [assErr, setAssErr] = useState("");
     const [assMsg, setAssMsg] = useState("");
     const [skuSearch, setSkuSearch] = useState("");
@@ -7321,24 +7349,46 @@
                       <div className="spacer" />
                       <span className="hint">{uniqueSkuCount} SKU{uniqueSkuCount !== 1 ? "s" : ""} · {myAss.length} stage task{myAss.length !== 1 ? "s" : ""}</span>
                     </div>
-                    {isOpen && (
-                      myAss.length === 0
-                        ? <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13, borderTop: "1px solid var(--line)" }}>No SKUs assigned yet.</div>
-                        : (() => {
-                          // Group all division assignments by SKU (not just this member's)
-                          // so we can show who else has each card and for which stage
-                          const skuGroups = {};
-                          myAss.forEach(a => {
-                            const key = a.sku.toLowerCase();
-                            if (!skuGroups[key]) {
-                              const prod = divAllProducts.find(p => p.sku.toLowerCase() === key);
-                              skuGroups[key] = { sku: a.sku, prod, rows: [] };
-                            }
-                            skuGroups[key].rows.push(a);
-                          });
-                          return (
-                            <div style={{ borderTop: "1px solid var(--line)" }}>
-                              {Object.values(skuGroups).map(group => {
+                      {isOpen && (
+                        myAss.length === 0
+                          ? <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13, borderTop: "1px solid var(--line)" }}>No SKUs assigned yet.</div>
+                          : (() => {
+                            // Group all division assignments by SKU (not just this member's)
+                            // so we can show who else has each card and for which stage
+                            const skuGroups = {};
+                            myAss.forEach(a => {
+                              const key = a.sku.toLowerCase();
+                              if (!skuGroups[key]) {
+                                const prod = divAllProducts.find(p => p.sku.toLowerCase() === key);
+                                skuGroups[key] = { sku: a.sku, prod, rows: [] };
+                              }
+                              skuGroups[key].rows.push(a);
+                            });
+                            const q = memberSkuSearch.trim().toLowerCase();
+                            const visibleGroups = !q ? Object.values(skuGroups) : Object.values(skuGroups).filter(g =>
+                              g.sku.toLowerCase().includes(q) || (g.prod?.name || "").toLowerCase().includes(q)
+                            );
+                            return (
+                              <div style={{ borderTop: "1px solid var(--line)" }}>
+                                <div style={{ padding: "10px 18px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6, alignItems: "center" }}>
+                                  <input
+                                    className="txt"
+                                    placeholder="Search SKU or product name…"
+                                    value={memberSkuSearch}
+                                    onChange={e => setMemberSkuSearch(e.target.value)}
+                                    onClick={e => e.stopPropagation()}
+                                    style={{ fontSize: 11.5, padding: "6px 10px", flex: 1, maxWidth: 280 }}
+                                  />
+                                  {memberSkuSearch && (
+                                    <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }}
+                                      onClick={e => { e.stopPropagation(); setMemberSkuSearch(""); }}>✕</button>
+                                  )}
+                                  <span className="tag">{visibleGroups.length} of {Object.values(skuGroups).length} SKUs</span>
+                                </div>
+                                {visibleGroups.length === 0 && (
+                                  <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13 }}>No SKUs match "{memberSkuSearch}"</div>
+                                )}
+                                {visibleGroups.map(group => {
                                 // All assignments for this SKU across the whole division
                                 const allForSku = divAssignments.filter(a => a.sku.toLowerCase() === group.sku.toLowerCase());
                                 // Build assignee summary: stage → memberName
