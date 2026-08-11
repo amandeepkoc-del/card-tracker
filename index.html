@@ -5033,33 +5033,8 @@
       if (fQcVerdict === "pending" && p.verdict) return false;
       if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
       if (fQcVerdict === "issues" && p.verdict !== "Issues Found") return false;
-      if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
-      if (fStage && fStageStatus) {
-        const stageStatus = p.stages?.[fStage]?.status || "Not Started";
-        if (stageStatus !== fStageStatus) return false;
-      }
-      if (fHasIssue && !myStageKeysOnCard(p).some(k => p.stages[k]?.status === "Issue")) return false;
-      if (fStalledDays) {
-        const cutoff = Date.now() - Number(fStalledDays) * 86400000;
-        const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-        if (productState(p) === "done" || updated >= cutoff) return false;
-      }
-      if (fQcVerdict === "pending" && p.verdict) return false;
-      if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
-      if (fQcVerdict === "issues" && p.verdict !== "Issues Found") return false;
-      if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
-      if (fStage && fStageStatus) {
-        const stageStatus = p.stages?.[fStage]?.status || "Not Started";
-        if (stageStatus !== fStageStatus) return false;
-      }
-      if (fHasIssue && !myStageKeysOnCard(p).some(k => p.stages[k]?.status === "Issue")) return false;
-      if (fStalledDays) {
-        const cutoff = Date.now() - Number(fStalledDays) * 86400000;
-        const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-        if (productState(p) === "done" || updated >= cutoff) return false;
-      }
-      if (fQcVerdict === "pending" && p.verdict) return false;
-      if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
+
+      // New: independent Completed/Pending dropdown
       
       // New: independent Completed/Pending dropdown — works whether or not
       // a member is selected, and doesn't touch assignTab's own logic at all.
@@ -5296,23 +5271,20 @@
                   <button
                     key={status}
                     onClick={() => {
-                      if (status === "Issue") {
-                        // "Issue" chip → jump straight to QC-flagged cards,
-                        // not a raw stage-status match.
-                        setFQcVerdict("issues");
-                        setFStage(""); setFStageStatus("");
-                        if (assignTab === "completed" || assignTab === "pending") {
-                          setAssignTab("assigned");
-                        }
-                      } else {
-                        setFQcVerdict("");
-                        setFStage(s.k); setFStageStatus(status);
+                      // Every chip — including "Issue" — filters to THIS
+                      // stage only, so "Issue: 17" on Photography shows
+                      // exactly the 17 Photography cards with an issue,
+                      // not every issue across every stage.
+                      setFQcVerdict("");
+                      setFStage(s.k); setFStageStatus(status);
+                      if (assignTab === "completed" || assignTab === "pending") {
+                        setAssignTab("assigned");
                       }
                       setPage(1);
                     }}
                     style={{
-                      background: (status === "Issue" ? fQcVerdict === "issues" : (fStage === s.k && fStageStatus === status)) ? color : bg,
-                      color: (status === "Issue" ? fQcVerdict === "issues" : (fStage === s.k && fStageStatus === status)) ? "#fff" : color,
+                      background: (fStage === s.k && fStageStatus === status) ? color : bg,
+                      color: (fStage === s.k && fStageStatus === status) ? "#fff" : color,
                       border: `1px solid ${color}`, borderRadius: 999, padding: "4px 12px",
                       fontSize: 12, fontWeight: 700, cursor: "pointer"
                     }}
