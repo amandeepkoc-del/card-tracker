@@ -3217,8 +3217,27 @@
       return map;
     }, [audit, fEventDate, division, isMasterOrAdminView, auth]);
 
-    const STATUS_TO_DATEKEY = { "In Progress": "inProgress", "Completed": "completed", "Issue": "issue" };
-    const drillCards = useMemo(() => {
+        const STATUS_TO_DATEKEY = { "In Progress": "inProgress", "Completed": "completed", "Issue": "issue" };
+        const downloadDrillExcel = () => {
+      if (!drill || !drillCards.length) return;
+        const headers = ["SKU", "Name", "Vendor", "Qty", "Stage", "Status", "Person", "Comments", "Updated At"];
+        const rows = drillCards.map(p => {
+        const stg = p.stages?.[drill.stageKey] || {};
+        return [
+          p.sku || "", p.name || "", p.vendor || "", p.qty || 0,
+          drill.stageName, stg.status || drill.status, stg.person || "",
+          stg.comments || "", stg.at ? fmt(stg.at) : ""
+        ];
+      });
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      ws["!cols"] = headers.map(h => ({ wch: Math.max(12, Math.min(h.length + 6, 28)) }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `${drill.stageName} - ${drill.status}`.slice(0, 31));
+      const safeStage = drill.stageName.replace(/[^a-z0-9]+/gi, "_");
+      const dateSuffix = fEventDate || new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `${division}_${safeStage}_${drill.status}_${dateSuffix}.xlsx`);
+    };
+        const drillCards = useMemo(() => {
       if (!drill) return [];
       if (fEventDate && dateScopedStageStats) {
         const dateKey = STATUS_TO_DATEKEY[drill.status];
@@ -3920,8 +3939,16 @@
                   <span style={{ fontSize: 11.5, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 999, padding: "2px 10px", fontWeight: 600 }}>
                     {drillCards.length} card{drillCards.length !== 1 ? "s" : ""}
                   </span>
-                  {fEventDate && <span className="tag">on {fEventDate}</span>}
-                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11, marginLeft: "auto" }} onClick={() => setDrill(null)}>✕ Close</button>
+                {fEventDate && <span className="tag">on {fEventDate}</span>}
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <button
+                    className="ghost"
+                    disabled={!drillCards.length}
+                    style={{ padding: "5px 10px", fontSize: 11, opacity: drillCards.length ? 1 : 0.45, cursor: drillCards.length ? "pointer" : "default" }}
+                    onClick={downloadDrillExcel}
+                  >⬇ Download Excel</button>
+                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setDrill(null)}>✕ Close</button>
+                </div>
                 </div>
                 {drillCards.length === 0 ? (
                   <div style={{ fontSize: 12, color: "var(--faint)" }}>No cards found.</div>
