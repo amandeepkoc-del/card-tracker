@@ -7693,7 +7693,7 @@
                           Show less
                         </button>
                       )}
-                    </div>
+                    </div>             
                   )}
 
                   {rows.length === 0 && (
@@ -7701,8 +7701,8 @@
                   )}
 
                   <button
-                    onClick={() => downloadReport(m, rows)}
-                    disabled={rows.length === 0}
+                    onClick={() => downloadReport(m, rows)}      
+                    disabled={rows.length === 0}               
                     className="ghost"
                     style={{ width: "100%", justifyContent: "center", fontSize: 12, opacity: rows.length === 0 ? 0.4 : 1 }}>
                     {I.upload({ width: 14, height: 14 })} Download full activity · {selMonth}
@@ -7824,22 +7824,40 @@ const PHOTO_VIDEO_STAGE_GROUP = [
 
     const [teamStats, setTeamStats] = useState({ backendTeam: [], photoTeam: [] });
     const [teamLoading, setTeamLoading] = useState(false);
+// --- Full per-member × per-stage breakdown (ALL stages, not just backend/photo groups) ---
+const [fullBreakdown, setFullBreakdown] = useState({ members: [] });
+const [fullLoading, setFullLoading] = useState(false);
 
-    useEffect(() => {
-      if (!isMasterOrAdmin || subTab !== "team") return;
-      setTeamLoading(true);
-      const params = new URLSearchParams({ division });
-      if (fVendor) params.set("vendor", fVendor);
-      if (fSetNo) params.set("set_no", fSetNo);
-      if (fDateFrom) params.set("dateFrom", fDateFrom);
-      if (fDateTo) params.set("dateTo", fDateTo);
+useEffect(() => {
+  if (!isMasterOrAdmin || subTab !== "full") return;
+  setFullLoading(true);
+  const params = new URLSearchParams({ division });
+  if (fVendor) params.set("vendor", fVendor);
+  if (fSetNo) params.set("set_no", fSetNo);
+  if (fDateFrom) params.set("dateFrom", fDateFrom);
+  if (fDateTo) params.set("dateTo", fDateTo);
 
-      fetch(`${API}/api/teamStageStats?${params.toString()}`)
-        .then(r => r.json())
-        .then(data => { if (data.ok) setTeamStats({ backendTeam: data.backendTeam, photoTeam: data.photoTeam }); })
-        .catch(e => console.error("teamStageStats fetch failed", e))
-        .finally(() => setTeamLoading(false));
-    }, [division, fVendor, fSetNo, fDateFrom, fDateTo, subTab, isMasterOrAdmin]);
+  fetch(`${API}/api/memberStageDetail?${params.toString()}`)
+    .then(async r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) throw new Error("Endpoint not implemented on backend");
+      return r.json();
+    })
+    .then(data => { if (data.ok) setFullBreakdown({ members: data.members || [] }); })
+    .catch(e => {
+      console.warn("memberStageDetail unavailable:", e.message);
+      setFullBreakdown({ members: [] }); // fall back to empty state, no crash
+    })
+    .finally(() => setFullLoading(false));
+}, [division, fVendor, fSetNo, fDateFrom, fDateTo, subTab, isMasterOrAdmin]);
+
+// Union of every stage key present across all members, kept in pipeline order
+const fullStageOrder = useMemo(() => {
+  const present = new Set();
+  fullBreakdown.members.forEach(m => (m.stages || []).forEach(s => present.add(s.stage)));
+  return STAGES.filter(s => present.has(s.k)).map(s => ({ k: s.k, n: s.n }));
+}, [fullBreakdown]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const canvasRef = useRef(null);
@@ -7950,7 +7968,7 @@ const productKpis = useMemo(() => {
             <thead>
               <tr>
                 <th rowSpan={2} style={{ position: "sticky", left: 0, zIndex: 3, background: "var(--card-2)", borderRight: "2px solid var(--line2)" }}>Member</th>
-                <th rowSpan={2} className="num" style={{ borderRight: "2px solid var(--line2)" }}>Total Assigned</th>
+                <th rowSpan={2} className="num" style={{ borderRight: "2px solid var(--line2)", minWidth: 90, whiteSpace: "nowrap" }}>Total Assigned</th>
                 {stageGroup.map(s => <th key={s.k} colSpan={3} style={{ borderLeft: "2px solid var(--line2)", textAlign: "center", fontWeight: 700, background: "#F3E4E4", color: "#7A3B3B" }}>{s.n}</th>)}
               </tr>
               <tr>
@@ -8035,6 +8053,78 @@ const productKpis = useMemo(() => {
       </div>
     );
 
+
+    const renderStageTable = (stage) => {
+      const rows = fullBreakdown.members
+        .map(m => {
+          const st = (m.stages || []).find(s => s.stage === stage.k);
+          return st ? { memberId: m.memberId, memberName: m.memberName, st } : null;
+        })
+        .filter(Boolean);
+
+      return (
+        <div className="card pad" key={stage.k} style={{ breakInside: "avoid" }}>
+          <div className="sec-h"><h3>{stage.n}</h3><span className="hint">{rows.length} member(s)</span></div>
+          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th className="num" style={{ background: "var(--sage-bg)", color: "var(--sage-ink)" }}>Done</th>
+                  <th className="num" style={{ background: "var(--sky-bg)", color: "var(--sky-ink)" }}>In Prog.</th>
+                  <th className="num" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)" }}>Not Started</th>
+                  <th className="num" style={{ background: "var(--rose-bg)", color: "var(--rose-ink)" }}>Issue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fullLoading && (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>Loading…</td></tr>
+                )}
+                {!fullLoading && rows.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No data.</td></tr>
+                )}
+                {rows.map(r => (
+                  <tr key={r.memberId}>
+                    <td><b>{r.memberName}</b></td>
+                    <td className="num" style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", fontWeight: 700 }}>{r.st.completedSkus}</td>
+                    <td className="num" style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", fontWeight: 700 }}>{r.st.inProgressSkus}</td>
+                    <td className="num" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", fontWeight: 700 }}>{r.st.notStartedSkus}</td>
+                    <td className="num" style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", fontWeight: 700 }}>{r.st.issueSkus}</td>
+                  </tr>
+                ))}
+                {!fullLoading && rows.length > 0 && (
+                  <tr style={{ fontWeight: 700 }}>
+                    <td style={{ borderTop: "2px solid var(--line2)" }}>Total</td>
+                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.completedSkus, 0)}</td>
+                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.inProgressSkus, 0)}</td>
+                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.notStartedSkus, 0)}</td>
+                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.issueSkus, 0)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    };
+
+    const renderFullBreakdownTable = () => (
+      <div
+        className="stacked-tables"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+          gap: 16,
+          maxWidth: "none",
+          width: "100%",
+        }}
+      >
+        {fullStageOrder.map(s => renderStageTable(s))}
+      </div>
+    );
+
+    
+
     return (
       <div>
         <div className="grid kpis" style={{ marginBottom: 16 }}>
@@ -8060,7 +8150,27 @@ const productKpis = useMemo(() => {
           <div className="subtab-row">
             <button className={"subtab-btn" + (subTab === "overview" ? " on" : "")} onClick={() => setSubTab("overview")}>Stage Speed</button>
             <button className={"subtab-btn" + (subTab === "team" ? " on" : "")} onClick={() => setSubTab("team")}>Team Assigned</button>
+            <button className={"subtab-btn" + (subTab === "full" ? " on" : "")} onClick={() => setSubTab("full")}>Full Breakdown</button>
           </div>
+        )}
+
+        {subTab === "full" && isMasterOrAdmin && (
+          <>
+            <div className="team-filters">
+              <select value={fVendor} onChange={e => setFVendor(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5, color: fVendor ? "var(--ink)" : "var(--muted)" }}>
+                <option value="">— all vendors —</option>
+                {vendorOptions.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <select value={fSetNo} onChange={e => setFSetNo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5, color: fSetNo ? "var(--ink)" : "var(--muted)" }}>
+                <option value="">— all set no. —</option>
+                {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <input type="date" value={fDateFrom} onChange={e => setFDateFrom(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
+              <span style={{ color: "var(--muted)", fontSize: 12 }}>to</span>
+              <input type="date" value={fDateTo} onChange={e => setFDateTo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
+            </div>
+            {renderFullBreakdownTable()}
+          </>
         )}
 
         {subTab === "overview" && (
