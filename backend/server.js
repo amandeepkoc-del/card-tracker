@@ -1540,142 +1540,19 @@ app.get("/api/teamStageStats", async (req, res) => {
 //    "Bombay Cards" together (matches the WHERE a.division IN (...)
 //    in your original query). Pass it to scope to just one division.
 // ---------------------------------------------------------------- */
-// app.get("/api/memberStageDetail", async (req, res) => {
-//   const { division } = req.query;
-
-//   try {
-//     const { rows } = await pool.query(
-//       `
-//       WITH target_assignments AS (
-//           SELECT DISTINCT a.member_id, a.manager_id, a.division, a.stage AS assigned_stage,
-//                  p.id AS product_id, a.sku
-//           FROM assignments a
-//           JOIN products p ON p.sku = a.sku AND p.division = a.division
-//           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
-//             AND ($1::division_name IS NULL OR a.division = $1::division_name)
-//       ),
-//       pushed AS (
-//           SELECT DISTINCT manager_id, division, assigned_stage, sku
-//           FROM target_assignments
-//           WHERE manager_id IS NOT NULL AND manager_id != member_id
-//       ),
-//       effective AS (
-//           SELECT DISTINCT ta.member_id, ta.division, ta.assigned_stage, ta.product_id, ta.sku
-//           FROM target_assignments ta
-//           WHERE NOT EXISTS (
-//               SELECT 1 FROM pushed p
-//               WHERE p.manager_id = ta.member_id
-//                 AND p.division = ta.division
-//                 AND p.assigned_stage = ta.assigned_stage
-//                 AND p.sku = ta.sku
-//           )
-//       ),
-//       per_stage AS (
-//           SELECT
-//               e.member_id,
-//               e.division,
-//               e.assigned_stage AS stage,
-//               COUNT(DISTINCT e.sku) AS assigned_skus,
-//               COUNT(DISTINCT e.sku) FILTER (WHERE se.status = 'Completed') AS completed_skus,
-//               COUNT(DISTINCT e.sku) FILTER (
-//                   WHERE se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%'
-//               ) AS in_progress_skus,
-//               COUNT(DISTINCT e.sku) FILTER (WHERE se.status = 'Not Started') AS not_started_skus,
-//               COUNT(DISTINCT e.sku) FILTER (
-//                   WHERE se.status = 'Issue'
-//                      OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
-//               ) AS issue_skus
-//           FROM effective e
-//           LEFT JOIN stage_entries se
-//               ON se.product_id = e.product_id
-//              AND se.stage_key = e.assigned_stage
-//           GROUP BY e.member_id, e.division, e.assigned_stage
-//       ),
-//       totals AS (
-//           SELECT member_id, division, COUNT(DISTINCT sku) AS total_assigned_skus
-//           FROM effective
-//           GROUP BY member_id, division
-//       )
-//       SELECT
-//           u.id AS member_id,
-//           u.name AS member_name,
-//           t.division,
-//           t.total_assigned_skus,
-//           ps.stage,
-//           ps.assigned_skus,
-//           ps.completed_skus,
-//           ps.in_progress_skus,
-//           ps.not_started_skus,
-//           ps.issue_skus
-//       FROM totals t
-//       JOIN users u ON u.id = t.member_id
-//       JOIN per_stage ps ON ps.member_id = t.member_id AND ps.division = t.division
-//       ORDER BY t.division, u.name, ps.stage
-//       `,
-//       [division || null]
-//     );
-
-//     // Reshape flat rows into a nested per-member structure, same spirit
-//     // as your other stats endpoints (allMemberStats / teamStageStats).
-//     const byKey = {};
-//     rows.forEach(r => {
-//       const key = r.member_id + "||" + r.division;
-//       if (!byKey[key]) {
-//         byKey[key] = {
-//           memberId: r.member_id,
-//           memberName: r.member_name,
-//           division: r.division,
-//           totalAssignedSkus: Number(r.total_assigned_skus),
-//           stages: [],
-//         };
-//       }
-//       byKey[key].stages.push({
-//         stage: r.stage,
-//         assignedSkus: Number(r.assigned_skus),
-//         completedSkus: Number(r.completed_skus),
-//         inProgressSkus: Number(r.in_progress_skus),
-//         notStartedSkus: Number(r.not_started_skus),
-//         issueSkus: Number(r.issue_skus),
-//       });
-//     });
-
-//     res.json({
-//       ok: true,
-//       rows, // raw rows, in case the frontend wants the flat shape
-//       members: Object.values(byKey),
-//     });
-//   } catch (e) {
-//     console.error("effectiveMemberStagePipeline error", e);
-//     res.status(500).json({ ok: false, error: e.message });
-//   }
-// });
-
-
-
-
 app.get("/api/memberStageDetail", async (req, res) => {
   const { division } = req.query;
 
   try {
     const { rows } = await pool.query(
       `
-      WITH ranked_assignments AS (
-          SELECT
-              a.member_id, a.manager_id, a.division, a.stage AS assigned_stage,
-              p.id AS product_id, a.sku,
-              ROW_NUMBER() OVER (
-                  PARTITION BY a.sku, a.stage, a.division
-                  ORDER BY a.assigned_at DESC NULLS LAST, a.id DESC
-              ) AS rn
+      WITH target_assignments AS (
+          SELECT DISTINCT a.member_id, a.manager_id, a.division, a.stage AS assigned_stage,
+                 p.id AS product_id, a.sku
           FROM assignments a
           JOIN products p ON p.sku = a.sku AND p.division = a.division
           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
             AND ($1::division_name IS NULL OR a.division = $1::division_name)
-      ),
-      target_assignments AS (
-          SELECT member_id, manager_id, division, assigned_stage, product_id, sku
-          FROM ranked_assignments
-          WHERE rn = 1
       ),
       pushed AS (
           SELECT DISTINCT manager_id, division, assigned_stage, sku
@@ -1738,6 +1615,8 @@ app.get("/api/memberStageDetail", async (req, res) => {
       [division || null]
     );
 
+    // Reshape flat rows into a nested per-member structure, same spirit
+    // as your other stats endpoints (allMemberStats / teamStageStats).
     const byKey = {};
     rows.forEach(r => {
       const key = r.member_id + "||" + r.division;
@@ -1762,14 +1641,135 @@ app.get("/api/memberStageDetail", async (req, res) => {
 
     res.json({
       ok: true,
-      rows,
+      rows, // raw rows, in case the frontend wants the flat shape
       members: Object.values(byKey),
     });
   } catch (e) {
-    console.error("memberStageDetail error", e);
+    console.error("effectiveMemberStagePipeline error", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+
+
+
+// app.get("/api/memberStageDetail", async (req, res) => {
+//   const { division } = req.query;
+
+//   try {
+//     const { rows } = await pool.query(
+//       `
+//       WITH ranked_assignments AS (
+//           SELECT
+//               a.member_id, a.manager_id, a.division, a.stage AS assigned_stage,
+//               p.id AS product_id, a.sku,
+//               ROW_NUMBER() OVER (
+//                   PARTITION BY a.sku, a.stage, a.division
+//                   ORDER BY a.assigned_at DESC NULLS LAST, a.id DESC
+//               ) AS rn
+//           FROM assignments a
+//           JOIN products p ON p.sku = a.sku AND p.division = a.division
+//           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
+//             AND ($1::division_name IS NULL OR a.division = $1::division_name)
+//       ),
+//       target_assignments AS (
+//           SELECT member_id, manager_id, division, assigned_stage, product_id, sku
+//           FROM ranked_assignments
+//           WHERE rn = 1
+//       ),
+//       pushed AS (
+//           SELECT DISTINCT manager_id, division, assigned_stage, sku
+//           FROM target_assignments
+//           WHERE manager_id IS NOT NULL AND manager_id != member_id
+//       ),
+//       effective AS (
+//           SELECT DISTINCT ta.member_id, ta.division, ta.assigned_stage, ta.product_id, ta.sku
+//           FROM target_assignments ta
+//           WHERE NOT EXISTS (
+//               SELECT 1 FROM pushed p
+//               WHERE p.manager_id = ta.member_id
+//                 AND p.division = ta.division
+//                 AND p.assigned_stage = ta.assigned_stage
+//                 AND p.sku = ta.sku
+//           )
+//       ),
+//       per_stage AS (
+//           SELECT
+//               e.member_id,
+//               e.division,
+//               e.assigned_stage AS stage,
+//               COUNT(DISTINCT e.sku) AS assigned_skus,
+//               COUNT(DISTINCT e.sku) FILTER (WHERE se.status = 'Completed') AS completed_skus,
+//               COUNT(DISTINCT e.sku) FILTER (
+//                   WHERE se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%'
+//               ) AS in_progress_skus,
+//               COUNT(DISTINCT e.sku) FILTER (WHERE se.status = 'Not Started') AS not_started_skus,
+//               COUNT(DISTINCT e.sku) FILTER (
+//                   WHERE se.status = 'Issue'
+//                      OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+//               ) AS issue_skus
+//           FROM effective e
+//           LEFT JOIN stage_entries se
+//               ON se.product_id = e.product_id
+//              AND se.stage_key = e.assigned_stage
+//           GROUP BY e.member_id, e.division, e.assigned_stage
+//       ),
+//       totals AS (
+//           SELECT member_id, division, COUNT(DISTINCT sku) AS total_assigned_skus
+//           FROM effective
+//           GROUP BY member_id, division
+//       )
+//       SELECT
+//           u.id AS member_id,
+//           u.name AS member_name,
+//           t.division,
+//           t.total_assigned_skus,
+//           ps.stage,
+//           ps.assigned_skus,
+//           ps.completed_skus,
+//           ps.in_progress_skus,
+//           ps.not_started_skus,
+//           ps.issue_skus
+//       FROM totals t
+//       JOIN users u ON u.id = t.member_id
+//       JOIN per_stage ps ON ps.member_id = t.member_id AND ps.division = t.division
+//       ORDER BY t.division, u.name, ps.stage
+//       `,
+//       [division || null]
+//     );
+
+//     const byKey = {};
+//     rows.forEach(r => {
+//       const key = r.member_id + "||" + r.division;
+//       if (!byKey[key]) {
+//         byKey[key] = {
+//           memberId: r.member_id,
+//           memberName: r.member_name,
+//           division: r.division,
+//           totalAssignedSkus: Number(r.total_assigned_skus),
+//           stages: [],
+//         };
+//       }
+//       byKey[key].stages.push({
+//         stage: r.stage,
+//         assignedSkus: Number(r.assigned_skus),
+//         completedSkus: Number(r.completed_skus),
+//         inProgressSkus: Number(r.in_progress_skus),
+//         notStartedSkus: Number(r.not_started_skus),
+//         issueSkus: Number(r.issue_skus),
+//       });
+//     });
+
+//     res.json({
+//       ok: true,
+//       rows,
+//       members: Object.values(byKey),
+//     });
+//   } catch (e) {
+//     console.error("memberStageDetail error", e);
+//     res.status(500).json({ ok: false, error: e.message });
+//   }
+// });
 
 
 

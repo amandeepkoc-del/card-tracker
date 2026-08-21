@@ -8029,7 +8029,6 @@ const productKpis = useMemo(() => {
               <tr style={{ fontWeight: 700 }}>
                   <td style={{ position: "sticky", left: 0, zIndex: 2, borderRight: "2px solid var(--line2)", borderTop: "2px solid var(--line2)" }}>Total</td>
                   <td className="num" style={{ borderRight: "2px solid var(--line2)", borderTop: "2px solid var(--line2)" }}>
-                    {rows.reduce((sum, r) => sum + r.totalAssigned, 0)}
                   </td>
                   {stageGroup.map(s => (
                     <React.Fragment key={s.k}>
@@ -8054,72 +8053,36 @@ const productKpis = useMemo(() => {
     );
 
 
-    const renderStageTable = (stage) => {
-      const rows = fullBreakdown.members
+    const buildGroupRowsFromFull = (stageGroup) => {
+      const groupKeys = new Set(stageGroup.map(s => s.k));
+      return fullBreakdown.members
         .map(m => {
-          const st = (m.stages || []).find(s => s.stage === stage.k);
-          return st ? { memberId: m.memberId, memberName: m.memberName, st } : null;
+          const perStage = {};
+          let hasAny = false;
+          (m.stages || []).forEach(s => {
+            if (!groupKeys.has(s.stage)) return;
+            hasAny = true;
+            perStage[s.stage] = {
+              completed: s.completedSkus,
+              pending: s.inProgressSkus + s.notStartedSkus,
+              issue: s.issueSkus,
+            };
+          });
+          if (!hasAny) return null;
+          return {
+            memberId: m.memberId,
+            memberName: m.memberName,
+            totalAssigned: m.totalAssignedSkus,
+            perStage,
+          };
         })
         .filter(Boolean);
-
-      return (
-        <div className="card pad" key={stage.k} style={{ breakInside: "avoid" }}>
-          <div className="sec-h"><h3>{stage.n}</h3><span className="hint">{rows.length} member(s)</span></div>
-          <div style={{ border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Member</th>
-                  <th className="num" style={{ background: "var(--sage-bg)", color: "var(--sage-ink)" }}>Done</th>
-                  <th className="num" style={{ background: "var(--sky-bg)", color: "var(--sky-ink)" }}>In Prog.</th>
-                  <th className="num" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)" }}>Not Started</th>
-                  <th className="num" style={{ background: "var(--rose-bg)", color: "var(--rose-ink)" }}>Issue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fullLoading && (
-                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>Loading…</td></tr>
-                )}
-                {!fullLoading && rows.length === 0 && (
-                  <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--muted)" }}>No data.</td></tr>
-                )}
-                {rows.map(r => (
-                  <tr key={r.memberId}>
-                    <td><b>{r.memberName}</b></td>
-                    <td className="num" style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", fontWeight: 700 }}>{r.st.completedSkus}</td>
-                    <td className="num" style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", fontWeight: 700 }}>{r.st.inProgressSkus}</td>
-                    <td className="num" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", fontWeight: 700 }}>{r.st.notStartedSkus}</td>
-                    <td className="num" style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", fontWeight: 700 }}>{r.st.issueSkus}</td>
-                  </tr>
-                ))}
-                {!fullLoading && rows.length > 0 && (
-                  <tr style={{ fontWeight: 700 }}>
-                    <td style={{ borderTop: "2px solid var(--line2)" }}>Total</td>
-                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.completedSkus, 0)}</td>
-                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.inProgressSkus, 0)}</td>
-                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.notStartedSkus, 0)}</td>
-                    <td className="num" style={{ borderTop: "2px solid var(--line2)" }}>{rows.reduce((s, r) => s + r.st.issueSkus, 0)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      );
     };
 
     const renderFullBreakdownTable = () => (
-      <div
-        className="stacked-tables"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-          gap: 16,
-          maxWidth: "none",
-          width: "100%",
-        }}
-      >
-        {fullStageOrder.map(s => renderStageTable(s))}
+      <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
+        {renderTeamTable("Backend team", buildGroupRowsFromFull(BACKEND_STAGE_GROUP), BACKEND_STAGE_GROUP)}
+        {renderTeamTable("Photography & Videography team", buildGroupRowsFromFull(PHOTO_VIDEO_STAGE_GROUP), PHOTO_VIDEO_STAGE_GROUP)}
       </div>
     );
 
@@ -8169,7 +8132,9 @@ const productKpis = useMemo(() => {
               <span style={{ color: "var(--muted)", fontSize: 12 }}>to</span>
               <input type="date" value={fDateTo} onChange={e => setFDateTo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
             </div>
-            {renderFullBreakdownTable()}
+            <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
+              {renderFullBreakdownTable()}
+            </div>
           </>
         )}
 
