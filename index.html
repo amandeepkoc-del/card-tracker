@@ -8628,16 +8628,36 @@ const filtered = useMemo(() => {
                             Auditor: <b style={{ color: "var(--ink)" }}>{operator}</b>
                           </span>
                           <div style={{ flex: 1 }} />
-                          <button
+                                                    <button
                             onClick={() => handleSubmit(p)}
-                            disabled={pipelineGateBlocks || !st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())}
+                            disabled={
+                              pipelineGateBlocks ||
+                              !st.verdict ||
+                              saving[p.id] ||
+                              (st.verdict === "Issues Found" && !st.comments?.trim()) ||
+                              (st.verdict === "Issues Found" &&
+                                eligibleStages.filter(s => p.stages[s.k].status === "Completed").length > 0 &&
+                                (!st.stagesBack || st.stagesBack.length === 0))
+                            }
                             style={{
                               padding: "10px 24px", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", border: 0, transition: ".15s",
                               background: saved[p.id] ? "var(--sage)" : st.verdict === "Approved" ? "var(--sage-deep)" : st.verdict === "Issues Found" ? "var(--rose-ink)" : "var(--faint)",
                               color: "#fff",
                               opacity: (pipelineGateBlocks || !st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())) ? 0.45 : 1,
                             }}>
-                            {pipelineGateBlocks ? "Pipeline incomplete — finish all stages first" : saving[p.id] ? "Saving…" : saved[p.id] ? "✓ Saved" : st.verdict === "Approved" ? "Confirm Approval" : st.verdict === "Issues Found" ? "Submit & Send Back" : "Select a verdict first"}
+                                                        {pipelineGateBlocks
+                              ? "Pipeline incomplete — finish all stages first"
+                              : saving[p.id]
+                              ? "Saving…"
+                              : saved[p.id]
+                              ? "✓ Saved"
+                              : st.verdict === "Approved"
+                              ? "Confirm Approval"
+                              : st.verdict === "Issues Found" && eligibleStages.filter(s => p.stages[s.k].status === "Completed").length > 0 && (!st.stagesBack || st.stagesBack.length === 0)
+                              ? "Select at least one stage to send back"
+                              : st.verdict === "Issues Found"
+                              ? "Submit & Send Back"
+                              : "Select a verdict first"}
                           </button>
                         </div>
                       </div>
