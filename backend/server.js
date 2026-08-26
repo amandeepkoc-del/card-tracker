@@ -20,21 +20,43 @@ const pool = new Pool({
   keepAliveInitialDelayMillis: 10000,
 });
 
-pool.on('error', (err) => {
-  console.error('Idle client error — pool will recover:', err.message);
+pool.on("error", (err) => {
+  console.error("Idle client error — pool will recover:", err.message);
 });
 
 const STAGE_KEYS = [
-  "barcoding", "content", "photography", "photoedit", "videography", "dimensions",
-  "videoedit", "images", "backend", "website", "scan", "qc", "finalqc",
+  "barcoding",
+  "content",
+  "photography",
+  "photoedit",
+  "videography",
+  "dimensions",
+  "videoedit",
+  "images",
+  "backend",
+  "website",
+  "scan",
+  "qc",
+  "finalqc",
 ];
 const STORES = [
-  "Chamrajpet", "HSR Layout", "Sahakar Nagar", "Hoodi", "Jayanagar",
-  "Bommasandra", "Hyderabad", "Mysore", "Vizag", "Hubli", "Chitradurga",
+  "Chamrajpet",
+  "HSR Layout",
+  "Sahakar Nagar",
+  "Hoodi",
+  "Jayanagar",
+  "Bommasandra",
+  "Hyderabad",
+  "Mysore",
+  "Vizag",
+  "Hubli",
+  "Chitradurga",
 ];
-const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter(k => k !== "finalqc").length; // 11
+const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter((k) => k !== "finalqc").length; // 11
 
-app.get("/", (req, res) => res.json({ message: "Card Tracker API is running!" }));
+app.get("/", (req, res) =>
+  res.json({ message: "Card Tracker API is running!" }),
+);
 
 app.get("/health", async (req, res) => {
   try {
@@ -50,40 +72,47 @@ app.get("/health", async (req, res) => {
    React app already expects (same shape ensureStages() builds).
 ---------------------------------------------------------------- */
 async function loadFullProduct(client, productId) {
-  const { rows: prows } = await client.query("SELECT * FROM products WHERE id = $1", [productId]);
+  const { rows: prows } = await client.query(
+    "SELECT * FROM products WHERE id = $1",
+    [productId],
+  );
   if (!prows.length) return null;
-  return hydrateProducts(client, prows).then(arr => arr[0]);
+  return hydrateProducts(client, prows).then((arr) => arr[0]);
 }
 
 async function hydrateProducts(client, productRows) {
   if (productRows.length === 0) return [];
-  const ids = productRows.map(p => p.id);
+  const ids = productRows.map((p) => p.id);
 
   const { rows: stageRows } = await client.query(
-    `SELECT * FROM stage_entries WHERE product_id = ANY($1::text[])`, [ids]
+    `SELECT * FROM stage_entries WHERE product_id = ANY($1::text[])`,
+    [ids],
   );
   const { rows: storeRows } = await client.query(
-    `SELECT * FROM stores WHERE product_id = ANY($1::text[])`, [ids]
+    `SELECT * FROM stores WHERE product_id = ANY($1::text[])`,
+    [ids],
   );
 
   const stagesByProduct = {};
-  stageRows.forEach(r => {
+  stageRows.forEach((r) => {
     (stagesByProduct[r.product_id] ||= {})[r.stage_key] = {
       status: r.status,
       person: r.person || "",
       comments: r.comments || "",
       skipped: !!r.skipped,
       at: r.updated_at ? r.updated_at.toISOString() : "",
-      ...(r.stage_key === "dimensions" ? {
-        width: r.width_cm != null ? String(r.width_cm) : "",
-        height: r.height_cm != null ? String(r.height_cm) : "",
-        weight: r.weight_gm != null ? String(r.weight_gm) : "",
-      } : {}),
+      ...(r.stage_key === "dimensions"
+        ? {
+            width: r.width_cm != null ? String(r.width_cm) : "",
+            height: r.height_cm != null ? String(r.height_cm) : "",
+            weight: r.weight_gm != null ? String(r.weight_gm) : "",
+          }
+        : {}),
     };
   });
 
   const storesByProduct = {};
-  storeRows.forEach(r => {
+  storeRows.forEach((r) => {
     (storesByProduct[r.product_id] ||= {})[r.store] = {
       dispatched: r.dispatched,
       received: r.received,
@@ -96,15 +125,33 @@ async function hydrateProducts(client, productRows) {
     };
   });
 
- return productRows.map(p => {
+  return productRows.map((p) => {
     const stages = {};
-    STAGE_KEYS.forEach(k => {
-      stages[k] = (stagesByProduct[p.id] && stagesByProduct[p.id][k]) || { status: "Not Started", person: "", comments: "", at: "" };
-      if (k === "dimensions" && !stages[k].width) { stages[k].width = stages[k].width || ""; stages[k].height = stages[k].height || ""; stages[k].weight = stages[k].weight || ""; }
+    STAGE_KEYS.forEach((k) => {
+      stages[k] = (stagesByProduct[p.id] && stagesByProduct[p.id][k]) || {
+        status: "Not Started",
+        person: "",
+        comments: "",
+        at: "",
+      };
+      if (k === "dimensions" && !stages[k].width) {
+        stages[k].width = stages[k].width || "";
+        stages[k].height = stages[k].height || "";
+        stages[k].weight = stages[k].weight || "";
+      }
     });
     const stores = {};
-    STORES.forEach(st => {
-      stores[st] = (storesByProduct[p.id] && storesByProduct[p.id][st]) || { dispatched: 0, received: false, receivedAt: "", receivedBy: "", missing: 0, damaged: 0, notes: "", at: "" };
+    STORES.forEach((st) => {
+      stores[st] = (storesByProduct[p.id] && storesByProduct[p.id][st]) || {
+        dispatched: 0,
+        received: false,
+        receivedAt: "",
+        receivedBy: "",
+        missing: 0,
+        damaged: 0,
+        notes: "",
+        at: "",
+      };
     });
     return {
       id: p.id,
@@ -132,40 +179,73 @@ async function hydrateProducts(client, productRows) {
 app.get("/api/getAll", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { rows: productRows } = await client.query("SELECT * FROM products ORDER BY created_at DESC");
+    const { rows: productRows } = await client.query(
+      "SELECT * FROM products ORDER BY created_at DESC",
+    );
     const products = await hydrateProducts(client, productRows);
 
-    const { rows: vendorRows } = await client.query("SELECT division, vendor_name FROM vendors ORDER BY vendor_name");
+    const { rows: vendorRows } = await client.query(
+      "SELECT division, vendor_name FROM vendors ORDER BY vendor_name",
+    );
     const vendors = {};
-    vendorRows.forEach(v => { (vendors[v.division] ||= []).push(v.vendor_name); });
+    vendorRows.forEach((v) => {
+      (vendors[v.division] ||= []).push(v.vendor_name);
+    });
 
-    const { rows: teamRows } = await client.query("SELECT * FROM users WHERE role = 'member'");
-    const teamMembers = teamRows.map(u => ({
-      id: u.id, name: u.name, email: u.email, password: u.password,
-      role: u.role, stages: u.stages, division: u.division,
-      managerId: u.manager_id, joinedAt: u.joined_at ? u.joined_at.toISOString() : "",
+    const { rows: teamRows } = await client.query(
+      "SELECT * FROM users WHERE role = 'member'",
+    );
+    const teamMembers = teamRows.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      password: u.password,
+      role: u.role,
+      stages: u.stages,
+      division: u.division,
+      managerId: u.manager_id,
+      joinedAt: u.joined_at ? u.joined_at.toISOString() : "",
     }));
 
-    const { rows: assignRows } = await client.query("SELECT * FROM assignments ORDER BY assigned_at DESC");
-    const assignments = assignRows.map(a => ({
-      id: a.id, memberId: a.member_id, managerId: a.manager_id,
-      sku: a.sku, stage: a.stage, division: a.division,
+    const { rows: assignRows } = await client.query(
+      "SELECT * FROM assignments ORDER BY assigned_at DESC",
+    );
+    const assignments = assignRows.map((a) => ({
+      id: a.id,
+      memberId: a.member_id,
+      managerId: a.manager_id,
+      sku: a.sku,
+      stage: a.stage,
+      division: a.division,
       assignedAt: a.assigned_at ? a.assigned_at.toISOString() : "",
     }));
 
-    const { rows: qcRows } = await client.query("SELECT * FROM qc_audit ORDER BY audited_at DESC");
-    const qcAudit = qcRows.map(q => ({
-      id: q.id, at: q.audited_at ? q.audited_at.toISOString() : "",
-      auditor: q.auditor_name, sku: q.sku, division: q.division,
-      productId: q.product_id, verdict: q.verdict, comments: q.comments,
+    const { rows: qcRows } = await client.query(
+      "SELECT * FROM qc_audit ORDER BY audited_at DESC",
+    );
+    const qcAudit = qcRows.map((q) => ({
+      id: q.id,
+      at: q.audited_at ? q.audited_at.toISOString() : "",
+      auditor: q.auditor_name,
+      sku: q.sku,
+      division: q.division,
+      productId: q.product_id,
+      verdict: q.verdict,
+      comments: q.comments,
       stagesSentBack: q.stages_sent_back,
     }));
 
-    const { rows: auditRows } = await client.query("SELECT * FROM audit_log ORDER BY logged_at DESC LIMIT 800");
-    const audit = auditRows.map(a => ({
-      id: a.id, at: a.logged_at ? a.logged_at.toISOString() : "",
-      actor: a.actor_name, action: a.action, entity: a.entity,
-      detail: a.detail, division: a.division,
+    const { rows: auditRows } = await client.query(
+      "SELECT * FROM audit_log ORDER BY logged_at DESC LIMIT 800",
+    );
+    const audit = auditRows.map((a) => ({
+      id: a.id,
+      at: a.logged_at ? a.logged_at.toISOString() : "",
+      actor: a.actor_name,
+      action: a.action,
+      entity: a.entity,
+      detail: a.detail,
+      division: a.division,
     }));
 
     // NEW — assignment history
@@ -176,17 +256,32 @@ app.get("/api/getAll", async (req, res) => {
        FROM assignment_history ah
        LEFT JOIN users u1 ON u1.id = ah.to_member_id
        LEFT JOIN users u2 ON u2.id = ah.from_member_id
-       ORDER BY ah.logged_at DESC LIMIT 500`
+       ORDER BY ah.logged_at DESC LIMIT 500`,
     );
-    const assignmentHistory = historyRows.map(r => ({
-      id: r.id, action: r.action, sku: r.sku, division: r.division,
-      toMemberId: r.to_member_id, toMemberName: r.to_member_name,
-      fromMemberId: r.from_member_id, fromMemberName: r.from_member_name,
-      managerId: r.manager_id, stage: r.stage,
-      note: r.note, at: r.logged_at
+    const assignmentHistory = historyRows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      sku: r.sku,
+      division: r.division,
+      toMemberId: r.to_member_id,
+      toMemberName: r.to_member_name,
+      fromMemberId: r.from_member_id,
+      fromMemberName: r.from_member_name,
+      managerId: r.manager_id,
+      stage: r.stage,
+      note: r.note,
+      at: r.logged_at,
     }));
 
-    res.json({ products, vendors, teamMembers, assignments, qcAudit, audit, assignmentHistory });
+    res.json({
+      products,
+      vendors,
+      teamMembers,
+      assignments,
+      qcAudit,
+      audit,
+      assignmentHistory,
+    });
   } catch (e) {
     console.error("getAll error", e);
     res.status(500).json({ ok: false, error: e.message });
@@ -201,11 +296,19 @@ app.get("/api/getAll", async (req, res) => {
 app.get("/api/getUsers", async (req, res) => {
   try {
     const { rows } = await pool.query("SELECT * FROM users");
-    res.json(rows.map(u => ({
-      id: u.id, name: u.name, email: u.email, password: u.password,
-      role: u.role, stages: u.stages, division: u.division,
-      managerId: u.manager_id, joinedAt: u.joined_at ? u.joined_at.toISOString() : "",
-    })));
+    res.json(
+      rows.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        password: u.password,
+        role: u.role,
+        stages: u.stages,
+        division: u.division,
+        managerId: u.manager_id,
+        joinedAt: u.joined_at ? u.joined_at.toISOString() : "",
+      })),
+    );
   } catch (e) {
     console.error("getUsers error", e);
     res.status(500).json([]);
@@ -218,7 +321,8 @@ app.get("/api/getUsers", async (req, res) => {
 ---------------------------------------------------------------- */
 app.post("/api/batchUpsertProducts", async (req, res) => {
   const products = req.body;
-  if (!Array.isArray(products)) return res.status(400).json({ ok: false, error: "expected array" });
+  if (!Array.isArray(products))
+    return res.status(400).json({ ok: false, error: "expected array" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -230,11 +334,20 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
            division=$2, sku=$3, name=$4, vendor=$5, inward=$6, qty=$7, note=$8, set_no=$9,
            verdict=$10, issues=$11, updated_at=$13`,
         [
-          p.id, p.division, p.sku, p.name || "", p.vendor || null,
-          p.inward || null, p.qty || 0, p.note || "", p.set_no || null,
-          p.verdict || null, p.issues || "",
-          p.createdAt || new Date().toISOString(), p.updatedAt || new Date().toISOString(),
-        ]
+          p.id,
+          p.division,
+          p.sku,
+          p.name || "",
+          p.vendor || null,
+          p.inward || null,
+          p.qty || 0,
+          p.note || "",
+          p.set_no || null,
+          p.verdict || null,
+          p.issues || "",
+          p.createdAt || new Date().toISOString(),
+          p.updatedAt || new Date().toISOString(),
+        ],
       );
       if (p.stages) {
         for (const key of Object.keys(p.stages)) {
@@ -245,12 +358,16 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
              ON CONFLICT (product_id, stage_key) DO UPDATE SET
                status=$3, person=$4, comments=$5, updated_at=$6, width_cm=$7, height_cm=$8, weight_gm=$9`,
             [
-              p.id, key, s.status || "Not Started", s.person || null, s.comments || "",
+              p.id,
+              key,
+              s.status || "Not Started",
+              s.person || null,
+              s.comments || "",
               s.at || new Date().toISOString(),
               s.width ? Number(s.width) || null : null,
               s.height ? Number(s.height) || null : null,
               s.weight ? Number(s.weight) || null : null,
-            ]
+            ],
           );
         }
       }
@@ -263,10 +380,17 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
              ON CONFLICT (product_id, store) DO UPDATE SET
                dispatched=$3, received=$4, received_at=$5, received_by=$6, missing=$7, damaged=$8, notes=$9, updated_at=$10`,
             [
-              p.id, store, s.dispatched || 0, !!s.received, s.receivedAt || null,
-              s.receivedBy || null, s.missing || 0, s.damaged || 0, s.notes || "",
+              p.id,
+              store,
+              s.dispatched || 0,
+              !!s.received,
+              s.receivedAt || null,
+              s.receivedBy || null,
+              s.missing || 0,
+              s.damaged || 0,
+              s.notes || "",
               s.at || new Date().toISOString(),
-            ]
+            ],
           );
         }
       }
@@ -288,7 +412,8 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
 ---------------------------------------------------------------- */
 app.post("/api/batchPatchStage", async (req, res) => {
   const { ids, stageKey, patch } = req.body;
-  if (!Array.isArray(ids) || !stageKey || !patch) return res.status(400).json({ ok: false, error: "bad payload" });
+  if (!Array.isArray(ids) || !stageKey || !patch)
+    return res.status(400).json({ ok: false, error: "bad payload" });
   const client = await pool.connect();
   try {
     await client.query("SET LOCAL statement_timeout = '120s'");
@@ -307,9 +432,19 @@ app.post("/api/batchPatchStage", async (req, res) => {
              comments = COALESCE($5, stage_entries.comments),
              skipped = COALESCE($6, stage_entries.skipped),
              updated_at = now()`,
-          [id, stageKey, patch.status || null, patch.person ?? null, patch.comments ?? "", patch.skipped ?? null]
+          [
+            id,
+            stageKey,
+            patch.status || null,
+            patch.person ?? null,
+            patch.comments ?? "",
+            patch.skipped ?? null,
+          ],
         );
-        await client.query("UPDATE products SET updated_at = now() WHERE id = $1", [id]);
+        await client.query(
+          "UPDATE products SET updated_at = now() WHERE id = $1",
+          [id],
+        );
       }
     }
 
@@ -332,7 +467,7 @@ app.post("/api/patchQCVerdict", async (req, res) => {
   try {
     await pool.query(
       "UPDATE products SET verdict = $2, issues = $3, updated_at = now() WHERE id = $1",
-      [id, verdict || null, issues || ""]
+      [id, verdict || null, issues || ""],
     );
     res.json({ ok: true });
   } catch (e) {
@@ -350,7 +485,17 @@ app.post("/api/appendQCAudit", async (req, res) => {
     await pool.query(
       `INSERT INTO qc_audit (id, audited_at, auditor_name, product_id, sku, division, verdict, comments, stages_sent_back)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [e.id, e.at || new Date().toISOString(), e.auditor || "", e.productId, e.sku, e.division, e.verdict, e.comments || "", e.stagesSentBack || ""]
+      [
+        e.id,
+        e.at || new Date().toISOString(),
+        e.auditor || "",
+        e.productId,
+        e.sku,
+        e.division,
+        e.verdict,
+        e.comments || "",
+        e.stagesSentBack || "",
+      ],
     );
     res.json({ ok: true });
   } catch (err) {
@@ -371,19 +516,26 @@ app.post("/api/upsertStore", async (req, res) => {
        ON CONFLICT (product_id, store) DO UPDATE SET
          dispatched=$3, received=$4, received_at=$5, received_by=$6, missing=$7, damaged=$8, notes=$9, updated_at=now()`,
       [
-        productId, store, storeData.dispatched || 0, !!storeData.received,
-        storeData.receivedAt || null, storeData.receivedBy || null,
-        storeData.missing || 0, storeData.damaged || 0, storeData.notes || "",
-      ]
+        productId,
+        store,
+        storeData.dispatched || 0,
+        !!storeData.received,
+        storeData.receivedAt || null,
+        storeData.receivedBy || null,
+        storeData.missing || 0,
+        storeData.damaged || 0,
+        storeData.notes || "",
+      ],
     );
-    await pool.query("UPDATE products SET updated_at = now() WHERE id = $1", [productId]);
+    await pool.query("UPDATE products SET updated_at = now() WHERE id = $1", [
+      productId,
+    ]);
     res.json({ ok: true });
   } catch (e) {
     console.error("upsertStore error", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 
 // POST /api/appendAssignmentHistory
 app.post("/api/appendAssignmentHistory", async (req, res) => {
@@ -393,8 +545,18 @@ app.post("/api/appendAssignmentHistory", async (req, res) => {
       `INSERT INTO assignment_history 
        (id, action, sku, division, from_member_id, to_member_id, manager_id, stage, note, logged_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [e.id, e.action, e.sku, e.division, e.fromMemberId || null,
-       e.toMemberId, e.managerId, e.stage || "", e.note || "", e.at || new Date().toISOString()]
+      [
+        e.id,
+        e.action,
+        e.sku,
+        e.division,
+        e.fromMemberId || null,
+        e.toMemberId,
+        e.managerId,
+        e.stage || "",
+        e.note || "",
+        e.at || new Date().toISOString(),
+      ],
     );
     res.json({ ok: true });
   } catch (err) {
@@ -419,15 +581,13 @@ app.get("/api/assignmentHistory", async (req, res) => {
        WHERE ($1::text IS NULL OR ah.division = $1)
        ORDER BY ah.logged_at DESC
        LIMIT 1000`,
-      [division || null]
+      [division || null],
     );
     res.json(rows);
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-
 
 /* ----------------------------------------------------------------
    POST /api/deleteProduct   body: { id }
@@ -453,13 +613,12 @@ app.post("/api/deleteProduct", async (req, res) => {
   }
 });
 
-
 app.get("/api/checkStage", async (req, res) => {
   const { productId, stageKey } = req.query;
   try {
     const { rows } = await pool.query(
       "SELECT status, updated_at FROM stage_entries WHERE product_id = $1 AND stage_key = $2",
-      [productId, stageKey]
+      [productId, stageKey],
     );
     res.json({ ok: true, row: rows[0] || null });
   } catch (e) {
@@ -478,7 +637,7 @@ app.post("/api/setVendors", async (req, res) => {
       for (const vendorName of req.body[division]) {
         await client.query(
           `INSERT INTO vendors (division, vendor_name) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-          [division, vendorName]
+          [division, vendorName],
         );
       }
     }
@@ -498,7 +657,8 @@ app.post("/api/setVendors", async (req, res) => {
 ---------------------------------------------------------------- */
 app.post("/api/setTeamMembers", async (req, res) => {
   const members = req.body;
-  if (!Array.isArray(members)) return res.status(400).json({ ok: false, error: "expected array" });
+  if (!Array.isArray(members))
+    return res.status(400).json({ ok: false, error: "expected array" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -508,7 +668,17 @@ app.post("/api/setTeamMembers", async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (id) DO UPDATE SET
            name=$2, email=$3, password=$4, role=$5, stages=$6, division=$7, manager_id=$8`,
-        [m.id, m.name, m.email, m.password || "", m.role || "member", m.stages || "", m.division || null, m.managerId || null, m.joinedAt || new Date().toISOString()]
+        [
+          m.id,
+          m.name,
+          m.email,
+          m.password || "",
+          m.role || "member",
+          m.stages || "",
+          m.division || null,
+          m.managerId || null,
+          m.joinedAt || new Date().toISOString(),
+        ],
       );
     }
     await client.query("COMMIT");
@@ -528,12 +698,15 @@ app.post("/api/setTeamMembers", async (req, res) => {
 ---------------------------------------------------------------- */
 app.post("/api/saveUsers", async (req, res) => {
   const users = req.body;
-  if (!Array.isArray(users)) return res.status(400).json({ ok: false, error: "expected array" });
+  if (!Array.isArray(users))
+    return res.status(400).json({ ok: false, error: "expected array" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows: existing } = await client.query("SELECT id, email FROM users");
-    const incomingEmails = new Set(users.map(u => u.email.toLowerCase()));
+    const { rows: existing } = await client.query(
+      "SELECT id, email FROM users",
+    );
+    const incomingEmails = new Set(users.map((u) => u.email.toLowerCase()));
     // remove users no longer present
     for (const row of existing) {
       if (!incomingEmails.has(row.email.toLowerCase())) {
@@ -548,7 +721,14 @@ app.post("/api/saveUsers", async (req, res) => {
          ON CONFLICT (id) DO UPDATE SET
            name=$2, email=$3, password=$4, role=$5, stages=$6
          `,
-        [id, u.name || u.email, u.email, u.password || "", u.role || "member", u.stages || ""]
+        [
+          id,
+          u.name || u.email,
+          u.email,
+          u.password || "",
+          u.role || "member",
+          u.stages || "",
+        ],
       );
     }
     await client.query("COMMIT");
@@ -596,14 +776,13 @@ app.post("/api/saveUsers", async (req, res) => {
 //   }
 // });
 
-
 app.post("/api/setAssignments", async (req, res) => {
   const assignments = req.body;
   if (!Array.isArray(assignments)) {
     return res.status(400).json({ ok: false, error: "expected array" });
   }
 
-  const divisionsInPayload = [...new Set(assignments.map(a => a.division))];
+  const divisionsInPayload = [...new Set(assignments.map((a) => a.division))];
 
   const client = await pool.connect();
   try {
@@ -614,25 +793,33 @@ app.post("/api/setAssignments", async (req, res) => {
     // gets compared against KOC Cards' much larger row count) ----
     for (const div of divisionsInPayload) {
       const { rows: cr } = await client.query(
-        "SELECT COUNT(*) FROM assignments WHERE division = $1", [div]
+        "SELECT COUNT(*) FROM assignments WHERE division = $1",
+        [div],
       );
       const currentCount = Number(cr[0].count);
-      const incomingCountForDiv = assignments.filter(a => a.division === div).length;
+      const incomingCountForDiv = assignments.filter(
+        (a) => a.division === div,
+      ).length;
 
       if (incomingCountForDiv === 0 && currentCount > 0) {
         await client.query("ROLLBACK");
         return res.status(400).json({
           ok: false,
-          error: `Refusing to clear ${currentCount} existing assignments for "${div}" via empty payload.`
+          error: `Refusing to clear ${currentCount} existing assignments for "${div}" via empty payload.`,
         });
       }
       const SHRINK_THRESHOLD = 0.5;
-      if (currentCount > 20 && incomingCountForDiv < currentCount * SHRINK_THRESHOLD) {
+      if (
+        currentCount > 20 &&
+        incomingCountForDiv < currentCount * SHRINK_THRESHOLD
+      ) {
         await client.query("ROLLBACK");
         return res.status(400).json({
           ok: false,
           error: `Payload has ${incomingCountForDiv} rows for "${div}" but ${currentCount} currently exist — looks like a stale/partial payload.`,
-          division: div, currentCount, incomingCount: incomingCountForDiv
+          division: div,
+          currentCount,
+          incomingCount: incomingCountForDiv,
         });
       }
     }
@@ -640,22 +827,31 @@ app.post("/api/setAssignments", async (req, res) => {
     // ---- Resolve product ids (unchanged) ----
     let prodMap = {};
     if (assignments.length > 0) {
-      const skus = assignments.map(a => a.sku);
-      const divisions = assignments.map(a => a.division);
+      const skus = assignments.map((a) => a.sku);
+      const divisions = assignments.map((a) => a.division);
       const { rows: prodRows } = await client.query(
         `SELECT id, division, lower(sku) as sku_lower
          FROM products
          WHERE (division, lower(sku)) IN (
            SELECT * FROM unnest($1::division_name[], $2::text[])
          )`,
-        [divisions, skus.map(s => s.toLowerCase())]
+        [divisions, skus.map((s) => s.toLowerCase())],
       );
-      prodRows.forEach(r => { prodMap[r.division + "||" + r.sku_lower] = r.id; });
+      prodRows.forEach((r) => {
+        prodMap[r.division + "||" + r.sku_lower] = r.id;
+      });
     }
 
-    const ids = [], memberIds = [], managerIds = [], productIds = [], outSkus = [], outDivisions = [], stages = [], assignedAts = [];
+    const ids = [],
+      memberIds = [],
+      managerIds = [],
+      productIds = [],
+      outSkus = [],
+      outDivisions = [],
+      stages = [],
+      assignedAts = [];
     const validIdsByDivision = {};
-    assignments.forEach(a => {
+    assignments.forEach((a) => {
       const pid = prodMap[a.division + "||" + a.sku.toLowerCase()];
       if (!pid) return;
       ids.push(a.id);
@@ -681,7 +877,16 @@ app.post("/api/setAssignments", async (req, res) => {
            division = EXCLUDED.division,
            stage = EXCLUDED.stage,
            assigned_at = EXCLUDED.assigned_at`,
-        [ids, memberIds, managerIds, productIds, outSkus, outDivisions, stages, assignedAts]
+        [
+          ids,
+          memberIds,
+          managerIds,
+          productIds,
+          outSkus,
+          outDivisions,
+          stages,
+          assignedAts,
+        ],
       );
     }
 
@@ -694,7 +899,7 @@ app.post("/api/setAssignments", async (req, res) => {
       if (keepIds.length > 0) {
         await client.query(
           `DELETE FROM assignments WHERE division = $1 AND id != ALL($2::text[])`,
-          [div, keepIds]
+          [div, keepIds],
         );
       }
     }
@@ -714,7 +919,10 @@ app.post("/api/setAssignments", async (req, res) => {
 // so it can never be triggered by accident via a stray/empty payload.
 app.post("/api/clearAssignments", async (req, res) => {
   if (req.body?.confirm !== true) {
-    return res.status(400).json({ ok: false, error: "Must pass { confirm: true } to clear all assignments." });
+    return res.status(400).json({
+      ok: false,
+      error: "Must pass { confirm: true } to clear all assignments.",
+    });
   }
   try {
     const { rows } = await pool.query("SELECT COUNT(*) FROM assignments");
@@ -725,7 +933,6 @@ app.post("/api/clearAssignments", async (req, res) => {
   }
 });
 
-
 /* ----------------------------------------------------------------
    POST /api/appendAudit   body: full audit entry
 ---------------------------------------------------------------- */
@@ -735,7 +942,15 @@ app.post("/api/appendAudit", async (req, res) => {
     await pool.query(
       `INSERT INTO audit_log (id, logged_at, actor_name, action, entity, detail, division)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [e.id, e.at || new Date().toISOString(), e.actor || "Unattributed", e.action, e.entity, e.detail || "", e.division || null]
+      [
+        e.id,
+        e.at || new Date().toISOString(),
+        e.actor || "Unattributed",
+        e.action,
+        e.entity,
+        e.detail || "",
+        e.division || null,
+      ],
     );
     res.json({ ok: true });
   } catch (err) {
@@ -750,9 +965,13 @@ app.post("/api/appendAudit", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/memberStats", async (req, res) => {
   const { memberId, division } = req.query;
-  if (!memberId || !division) return res.status(400).json({ ok: false, error: "memberId and division required" });
+  if (!memberId || !division)
+    return res
+      .status(400)
+      .json({ ok: false, error: "memberId and division required" });
   try {
-    const { rows } = await pool.query(`
+    const { rows } = await pool.query(
+      `
       WITH member_skus AS (
         SELECT DISTINCT sku
         FROM assignments
@@ -797,7 +1016,9 @@ app.get("/api/memberStats", async (req, res) => {
         (SELECT COUNT(*) FROM card_level WHERE stages_completed = stages_owned AND NOT has_open_issue) AS completed,
         (SELECT COUNT(*) FROM card_level WHERE stages_completed < stages_owned AND NOT has_open_issue) AS pending,
         (SELECT COUNT(*) FROM card_level WHERE has_open_issue) AS issues
-    `, [memberId, division]);
+    `,
+      [memberId, division],
+    );
 
     res.json({ ok: true, ...rows[0] });
   } catch (e) {
@@ -806,12 +1027,13 @@ app.get("/api/memberStats", async (req, res) => {
   }
 });
 
-
 app.get("/api/allMemberStats", async (req, res) => {
   const { division } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
   try {
-    const { rows } = await pool.query(`
+    const { rows } = await pool.query(
+      `
       WITH target_assignments AS (
         SELECT DISTINCT a.member_id, p.id AS product_id, a.stage AS assigned_stage
         FROM assignments a
@@ -845,18 +1067,20 @@ app.get("/api/allMemberStats", async (req, res) => {
       JOIN users u ON u.id = cl.member_id
       GROUP BY u.id, u.name
       ORDER BY u.name
-    `, [division]);
+    `,
+      [division],
+    );
 
     res.json({
       ok: true,
-      members: rows.map(r => ({
+      members: rows.map((r) => ({
         memberId: r.member_id,
         memberName: r.member_name,
         total: Number(r.total_assigned),
         completed: Number(r.completed),
         pending: Number(r.pending),
         issues: Number(r.issues),
-      }))
+      })),
     });
   } catch (e) {
     console.error("allMemberStats error", e);
@@ -864,19 +1088,19 @@ app.get("/api/allMemberStats", async (req, res) => {
   }
 });
 
-
-
-
-
 /* ----------------------------------------------------------------
    GET /api/pipelineStats?memberId=chitra&division=KOC Cards
    Returns per-stage counts for all SKUs assigned to this member
 ---------------------------------------------------------------- */
 app.get("/api/pipelineStats", async (req, res) => {
   const { memberId, division } = req.query;
-  if (!memberId || !division) return res.status(400).json({ ok: false, error: "memberId and division required" });
+  if (!memberId || !division)
+    return res
+      .status(400)
+      .json({ ok: false, error: "memberId and division required" });
   try {
-    const { rows } = await pool.query(`
+    const { rows } = await pool.query(
+      `
       WITH member_skus AS (
         SELECT DISTINCT p.id as product_id, a.stage as assigned_stage
         FROM assignments a
@@ -899,10 +1123,12 @@ app.get("/api/pipelineStats", async (req, res) => {
       JOIN stage_entries se ON se.product_id = ms.product_id
         AND se.stage_key = ms.assigned_stage
       GROUP BY se.stage_key
-    `, [memberId, division]);
+    `,
+      [memberId, division],
+    );
 
     const stages = {};
-    rows.forEach(r => {
+    rows.forEach((r) => {
       stages[r.stage_key] = {
         notStarted: Number(r.not_started),
         inProgress: Number(r.in_progress),
@@ -922,7 +1148,8 @@ app.get("/api/pipelineStats", async (req, res) => {
    Helpers for /api/exportProducts
 ---------------------------------------------------------------- */
 async function getExportRowsForDivision(client, division, scope) {
-  const { rows } = await client.query(`
+  const { rows } = await client.query(
+    `
     WITH stage_counts AS (
       SELECT
         p.id AS product_id,
@@ -947,12 +1174,15 @@ async function getExportRowsForDivision(client, division, scope) {
         OR ($2 = 'issues'    AND (p.verdict = 'Issues Found' OR sc.issue_stages > 0))
       )
     ORDER BY p.sku
-  `, [division, scope, PIPELINE_STAGE_COUNT]);
+  `,
+    [division, scope, PIPELINE_STAGE_COUNT],
+  );
   return rows;
 }
 
 async function getExportRowsForMember(client, division, memberId, scope) {
-  const { rows } = await client.query(`
+  const { rows } = await client.query(
+    `
     WITH my_assignments AS (
       SELECT DISTINCT a.sku, a.stage
       FROM assignments a
@@ -978,23 +1208,35 @@ async function getExportRowsForMember(client, division, memberId, scope) {
       OR ($3 = 'pending'   AND stages_completed < stages_owned)
       OR ($3 = 'issues'    AND (verdict = 'Issues Found' OR stages_issue > 0))
     ORDER BY sku
-  `, [memberId, division, scope]);
+  `,
+    [memberId, division, scope],
+  );
   return rows;
 }
 
 function normStatusServer(v) {
   if (!v) return null;
-  const m = { "not started": "Not Started", "in progress": "In Progress", "wip": "In Progress",
-    "pending": "In Progress", "completed": "Completed", "complete": "Completed", "done": "Completed",
-    "approved": "Completed", "issue": "Issue", "issues": "Issue" };
+  const m = {
+    "not started": "Not Started",
+    "in progress": "In Progress",
+    wip: "In Progress",
+    pending: "In Progress",
+    completed: "Completed",
+    complete: "Completed",
+    done: "Completed",
+    approved: "Completed",
+    issue: "Issue",
+    issues: "Issue",
+  };
   return m[String(v).trim().toLowerCase()] || null;
 }
 
 app.post("/api/bulkImportProducts", async (req, res) => {
   const rows = req.body;
-  if (!Array.isArray(rows)) return res.status(400).json({ ok: false, error: "expected array" });
+  if (!Array.isArray(rows))
+    return res.status(400).json({ ok: false, error: "expected array" });
 
-  const validRows = rows.filter(r => {
+  const validRows = rows.filter((r) => {
     const sku = String(r.sku || "").trim();
     return sku && !sku.toUpperCase().includes("EXAMPLE");
   });
@@ -1008,8 +1250,15 @@ app.post("/api/bulkImportProducts", async (req, res) => {
     await client.query("BEGIN");
 
     // ---- 1. Bulk upsert products (ONE query for the whole chunk) ----
-    const divisions = [], skus = [], names = [], vendors = [], inwards = [], qtys = [], notes = [], setNos = [];
-    validRows.forEach(r => {
+    const divisions = [],
+      skus = [],
+      names = [],
+      vendors = [],
+      inwards = [],
+      qtys = [],
+      notes = [],
+      setNos = [];
+    validRows.forEach((r) => {
       divisions.push(r.division || null);
       skus.push(String(r.sku).trim());
       names.push(r.name || "");
@@ -1034,45 +1283,86 @@ app.post("/api/bulkImportProducts", async (req, res) => {
          set_no  = COALESCE(NULLIF(EXCLUDED.set_no,''), products.set_no),
          updated_at = now()
        RETURNING id, sku, division, (xmax = 0) AS inserted`,
-      [divisions, skus, names, vendors, inwards, qtys, notes, setNos]
+      [divisions, skus, names, vendors, inwards, qtys, notes, setNos],
     );
 
     const skuToId = {};
-    upsertResult.rows.forEach(r => {
+    upsertResult.rows.forEach((r) => {
       skuToId[r.division + "||" + r.sku.toLowerCase()] = r.id;
       r.inserted ? results.created++ : results.updated++;
     });
 
     // ---- 2. Bulk upsert vendors (deduped, ONE query) ----
     const vendorPairs = new Set();
-    validRows.forEach(r => {
+    validRows.forEach((r) => {
       if (r.vendor && String(r.vendor).trim()) {
         vendorPairs.add((r.division || "") + "||" + String(r.vendor).trim());
       }
     });
     if (vendorPairs.size > 0) {
-      const vDivs = [], vNames = [];
-      vendorPairs.forEach(p => { const [d, n] = p.split("||"); vDivs.push(d); vNames.push(n); });
+      const vDivs = [],
+        vNames = [];
+      vendorPairs.forEach((p) => {
+        const [d, n] = p.split("||");
+        vDivs.push(d);
+        vNames.push(n);
+      });
       await client.query(
         `INSERT INTO vendors (division, vendor_name)
          SELECT * FROM unnest($1::division_name[], $2::text[]) ON CONFLICT DO NOTHING`,
-        [vDivs, vNames]
+        [vDivs, vNames],
       );
     }
 
     // ---- 3. Bulk upsert stage_entries (ONE query for ALL stages of ALL rows) ----
-    const pids = [], stageKeys = [], statuses = [], persons = [], commentsArr = [], widths = [], heights = [], weights = [];
-    validRows.forEach(r => {
-      const key = (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
+    const pids = [],
+      stageKeys = [],
+      statuses = [],
+      persons = [],
+      commentsArr = [],
+      widths = [],
+      heights = [],
+      weights = [];
+    validRows.forEach((r) => {
+      const key =
+        (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
       const productId = skuToId[key];
-      if (!productId) { results.failed.push({ sku: r.sku, error: "product upsert failed" }); return; }
+      if (!productId) {
+        results.failed.push({ sku: r.sku, error: "product upsert failed" });
+        return;
+      }
       for (const s of STAGE_KEYS) {
         if (s === "finalqc") continue;
-        const statusRaw = r[s + "_status"], person = r[s + "_person"] || "", comm = r[s + "_comments"] || "";
-        const width  = s === "dimensions" ? (r.dimensions_width  ? Number(r.dimensions_width)  : null) : null;
-        const height = s === "dimensions" ? (r.dimensions_height ? Number(r.dimensions_height) : null) : null;
-        const weight = s === "dimensions" ? (r.dimensions_weight ? Number(r.dimensions_weight) : null) : null;
-        if (!statusRaw && !person && !comm && width == null && height == null && weight == null) continue;
+        const statusRaw = r[s + "_status"],
+          person = r[s + "_person"] || "",
+          comm = r[s + "_comments"] || "";
+        const width =
+          s === "dimensions"
+            ? r.dimensions_width
+              ? Number(r.dimensions_width)
+              : null
+            : null;
+        const height =
+          s === "dimensions"
+            ? r.dimensions_height
+              ? Number(r.dimensions_height)
+              : null
+            : null;
+        const weight =
+          s === "dimensions"
+            ? r.dimensions_weight
+              ? Number(r.dimensions_weight)
+              : null
+            : null;
+        if (
+          !statusRaw &&
+          !person &&
+          !comm &&
+          width == null &&
+          height == null &&
+          weight == null
+        )
+          continue;
         pids.push(productId);
         stageKeys.push(s);
         statuses.push(normStatusServer(statusRaw));
@@ -1098,27 +1388,45 @@ app.post("/api/bulkImportProducts", async (req, res) => {
            width_cm  = COALESCE(EXCLUDED.width_cm, stage_entries.width_cm),
            height_cm = COALESCE(EXCLUDED.height_cm, stage_entries.height_cm),
            weight_gm = COALESCE(EXCLUDED.weight_gm, stage_entries.weight_gm)`,
-        [pids, stageKeys, statuses, persons, commentsArr, widths, heights, weights]
+        [
+          pids,
+          stageKeys,
+          statuses,
+          persons,
+          commentsArr,
+          widths,
+          heights,
+          weights,
+        ],
       );
     }
 
     // ---- 4. QC verdicts (ONE query) ----
-    const qcIds = [], qcVerdicts = [], qcIssues = [];
-    validRows.forEach(r => {
+    const qcIds = [],
+      qcVerdicts = [],
+      qcIssues = [];
+    validRows.forEach((r) => {
       if (!r.qc_verdict) return;
-      const key = (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
+      const key =
+        (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
       const productId = skuToId[key];
       if (!productId) return;
-      const v = /appro/i.test(r.qc_verdict) ? "Approved" : /issue/i.test(r.qc_verdict) ? "Issues Found" : null;
+      const v = /appro/i.test(r.qc_verdict)
+        ? "Approved"
+        : /issue/i.test(r.qc_verdict)
+          ? "Issues Found"
+          : null;
       if (!v) return;
-      qcIds.push(productId); qcVerdicts.push(v); qcIssues.push(r.qc_issues || "");
+      qcIds.push(productId);
+      qcVerdicts.push(v);
+      qcIssues.push(r.qc_issues || "");
     });
     if (qcIds.length > 0) {
       await client.query(
         `UPDATE products p SET verdict = t.v, issues = t.iss, updated_at = now()
          FROM unnest($1::text[], $2::text[], $3::text[]) AS t(id, v, iss)
          WHERE p.id = t.id`,
-        [qcIds, qcVerdicts, qcIssues]
+        [qcIds, qcVerdicts, qcIssues],
       );
     }
 
@@ -1133,12 +1441,6 @@ app.post("/api/bulkImportProducts", async (req, res) => {
   }
 });
 
-
-
-
-
-
-
 /* ----------------------------------------------------------------
    GET /api/exportProducts?division=KOC Cards&scope=pending&memberId=chitra
    scope: "pending" | "completed" | "issues" | "all"
@@ -1146,7 +1448,8 @@ app.post("/api/bulkImportProducts", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/exportProducts", async (req, res) => {
   const { division, scope, memberId } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
   if (!["pending", "completed", "issues", "all"].includes(scope)) {
     return res.status(400).json({ ok: false, error: "invalid scope" });
   }
@@ -1165,7 +1468,6 @@ app.get("/api/exportProducts", async (req, res) => {
   }
 });
 
-
 /* ----------------------------------------------------------------
    GET /api/stageIssueStats?division=KOC Cards
    Returns issue counts per stage, based on each product's LATEST
@@ -1173,9 +1475,11 @@ app.get("/api/exportProducts", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/stageIssueStats", async (req, res) => {
   const { division } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
   try {
-    const { rows } = await pool.query(`
+    const { rows } = await pool.query(
+      `
       SELECT se.stage_key, COUNT(*) AS issue_count
       FROM stage_entries se
       JOIN products p ON p.id = se.product_id
@@ -1185,10 +1489,14 @@ app.get("/api/stageIssueStats", async (req, res) => {
           OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
         )
       GROUP BY se.stage_key
-    `, [division]);
+    `,
+      [division],
+    );
 
     const stages = {};
-    rows.forEach(r => { stages[r.stage_key] = Number(r.issue_count); });
+    rows.forEach((r) => {
+      stages[r.stage_key] = Number(r.issue_count);
+    });
     res.json({ ok: true, stages });
   } catch (e) {
     console.error("stageIssueStats error", e);
@@ -1206,13 +1514,15 @@ app.get("/api/stageIssueStats", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/pipelineBreakdown", async (req, res) => {
   const { division, memberId, vendor, setNo } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
 
   try {
     let rows;
     if (memberId) {
       // Scoped to one member's specific assigned stages on their assigned SKUs
-      const { rows: r } = await pool.query(`
+      const { rows: r } = await pool.query(
+        `
         WITH member_scope AS (
           SELECT DISTINCT p.id AS product_id, a.stage AS stage_key
           FROM assignments a
@@ -1236,11 +1546,14 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
         JOIN stage_entries se
           ON se.product_id = ms.product_id AND se.stage_key = ms.stage_key
         GROUP BY se.stage_key
-      `, [memberId, division, vendor || null, setNo || null]);
+      `,
+        [memberId, division, vendor || null, setNo || null],
+      );
       rows = r;
     } else {
       // Whole division (or vendor/setNo-narrowed), every stage on every product
-      const { rows: r } = await pool.query(`
+      const { rows: r } = await pool.query(
+        `
         SELECT
           se.stage_key,
           COUNT(*) FILTER (WHERE se.status = 'Not Started') AS not_started,
@@ -1257,15 +1570,17 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
           AND ($2::text IS NULL OR p.vendor = $2)
           AND ($3::text IS NULL OR p.set_no = $3)
         GROUP BY se.stage_key
-      `, [division, vendor || null, setNo || null]);
+      `,
+        [division, vendor || null, setNo || null],
+      );
       rows = r;
     }
 
     const stages = {};
-    rows.forEach(r => {
+    rows.forEach((r) => {
       stages[r.stage_key] = {
         notStarted: Number(r.not_started),
-        inProgress: Number(r.in_progress), 
+        inProgress: Number(r.in_progress),
         completed: Number(r.completed),
         issue: Number(r.issue),
       };
@@ -1283,42 +1598,49 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/stageSpeedStats", async (req, res) => {
   const { division } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
   try {
     const { rows } = await pool.query(
       `SELECT entity, detail, logged_at FROM audit_log
        WHERE action = 'Stage update' AND division = $1
        ORDER BY entity, logged_at ASC`,
-      [division]
+      [division],
     );
 
     // entity+stage -> { firstInProgress, firstCompleted }
     const track = {};
-    rows.forEach(r => {
+    rows.forEach((r) => {
       const m = String(r.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·|$)/);
       if (!m) return;
       const stageName = m[1].trim();
       const status = m[2].trim();
       const key = r.entity + "||" + stageName;
-      if (!track[key]) track[key] = { stageName, firstInProgress: null, firstCompleted: null };
+      if (!track[key])
+        track[key] = { stageName, firstInProgress: null, firstCompleted: null };
       const t = track[key];
-      if (status === "In Progress" && !t.firstInProgress) t.firstInProgress = r.logged_at;
-      if (status === "Completed" && !t.firstCompleted && t.firstInProgress) t.firstCompleted = r.logged_at;
+      if (status === "In Progress" && !t.firstInProgress)
+        t.firstInProgress = r.logged_at;
+      if (status === "Completed" && !t.firstCompleted && t.firstInProgress)
+        t.firstCompleted = r.logged_at;
     });
 
     const byStage = {};
-    Object.values(track).forEach(t => {
+    Object.values(track).forEach((t) => {
       if (!t.firstInProgress || !t.firstCompleted) return;
-      const hours = (new Date(t.firstCompleted) - new Date(t.firstInProgress)) / 3600000;
+      const hours =
+        (new Date(t.firstCompleted) - new Date(t.firstInProgress)) / 3600000;
       if (hours < 0 || hours > 24 * 60) return; // discard bad/outlier data
       (byStage[t.stageName] ||= []).push(hours);
     });
 
-    const stats = Object.entries(byStage).map(([stageName, durations]) => ({
-      stageName,
-      avgHours: durations.reduce((a, b) => a + b, 0) / durations.length,
-      sampleCount: durations.length,
-    })).sort((a, b) => a.avgHours - b.avgHours);
+    const stats = Object.entries(byStage)
+      .map(([stageName, durations]) => ({
+        stageName,
+        avgHours: durations.reduce((a, b) => a + b, 0) / durations.length,
+        sampleCount: durations.length,
+      }))
+      .sort((a, b) => a.avgHours - b.avgHours);
 
     res.json({ ok: true, stats });
   } catch (e) {
@@ -1335,22 +1657,31 @@ app.get("/api/stageSpeedStats", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/memberSpeedStats", async (req, res) => {
   const { division } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
   try {
     const { rows } = await pool.query(
       `SELECT entity, detail, logged_at, actor_name FROM audit_log
        WHERE action = 'Stage update' AND division = $1
        ORDER BY entity, logged_at ASC`,
-      [division]
+      [division],
     );
 
     const lastInProgress = {}; // "sku||stageName" -> timestamp
-    const byMember = {};       // person name -> accumulator
+    const byMember = {}; // person name -> accumulator
 
-    const touch = (name) => (byMember[name] ||= { durations: [], completions: 0, issues: 0, byStage: {} });
+    const touch = (name) =>
+      (byMember[name] ||= {
+        durations: [],
+        completions: 0,
+        issues: 0,
+        byStage: {},
+      });
 
-    rows.forEach(r => {
-      const m = String(r.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+    rows.forEach((r) => {
+      const m = String(r.detail || "").match(
+        /^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/,
+      );
       if (!m) return;
       const stageName = m[1].trim();
       const status = m[2].trim();
@@ -1378,30 +1709,34 @@ app.get("/api/memberSpeedStats", async (req, res) => {
       }
     });
 
-    const members = Object.entries(byMember).map(([name, m]) => {
-      const avgHours = m.durations.length
-        ? m.durations.reduce((a, b) => a + b, 0) / m.durations.length
-        : null;
-      const stageBreakdown = Object.entries(m.byStage)
-        .map(([stageName, arr]) => ({
-          stageName,
-          avgHours: arr.reduce((a, b) => a + b, 0) / arr.length,
-          count: arr.length,
-        }))
-        .sort((a, b) => a.avgHours - b.avgHours);
-      return {
-        name,
-        completions: m.completions,
-        avgHours,
-        issues: m.issues,
-        issueRate: (m.completions + m.issues) ? m.issues / (m.completions + m.issues) : 0,
-        fastestStage: stageBreakdown[0] || null,
-        slowestStage: stageBreakdown[stageBreakdown.length - 1] || null,
-        stageBreakdown,
-      };
-    })
-    .filter(x => x.completions > 0)
-    .sort((a, b) => a.avgHours - b.avgHours); // fastest first
+    const members = Object.entries(byMember)
+      .map(([name, m]) => {
+        const avgHours = m.durations.length
+          ? m.durations.reduce((a, b) => a + b, 0) / m.durations.length
+          : null;
+        const stageBreakdown = Object.entries(m.byStage)
+          .map(([stageName, arr]) => ({
+            stageName,
+            avgHours: arr.reduce((a, b) => a + b, 0) / arr.length,
+            count: arr.length,
+          }))
+          .sort((a, b) => a.avgHours - b.avgHours);
+        return {
+          name,
+          completions: m.completions,
+          avgHours,
+          issues: m.issues,
+          issueRate:
+            m.completions + m.issues
+              ? m.issues / (m.completions + m.issues)
+              : 0,
+          fastestStage: stageBreakdown[0] || null,
+          slowestStage: stageBreakdown[stageBreakdown.length - 1] || null,
+          stageBreakdown,
+        };
+      })
+      .filter((x) => x.completions > 0)
+      .sort((a, b) => a.avgHours - b.avgHours); // fastest first
 
     res.json({ ok: true, members });
   } catch (e) {
@@ -1415,22 +1750,35 @@ app.get("/api/memberSpeedStats", async (req, res) => {
    Per-member counts of assigned stages, split into Backend team vs
    Photography & Videography team, with optional filters.
 ---------------------------------------------------------------- */
-const TEAM_BACKEND_STAGE_KEYS = ["content", "dimensions", "images", "backend", "website"];
-const TEAM_PHOTO_STAGE_KEYS = ["photography", "photoedit", "videography", "videoedit"];
+const TEAM_BACKEND_STAGE_KEYS = [
+  "content",
+  "dimensions",
+  "images",
+  "backend",
+  "website",
+];
+const TEAM_PHOTO_STAGE_KEYS = [
+  "photography",
+  "photoedit",
+  "videography",
+  "videoedit",
+];
 
 app.get("/api/teamStageStats", async (req, res) => {
   const { division, vendor, set_no, dateFrom, dateTo } = req.query;
-  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
 
-
-    try {
+  try {
     const allStageKeys = [...TEAM_BACKEND_STAGE_KEYS, ...TEAM_PHOTO_STAGE_KEYS];
 
     const { rows: userRows } = await pool.query(
-      `SELECT id, manager_id FROM users`
+      `SELECT id, manager_id FROM users`,
     );
     const managerIdOf = {};
-    userRows.forEach(u => { managerIdOf[u.id] = u.manager_id; });
+    userRows.forEach((u) => {
+      managerIdOf[u.id] = u.manager_id;
+    });
     const conditions = ["a.division = $1", "a.stage = ANY($2)"];
     const params = [division, allStageKeys];
 
@@ -1460,61 +1808,70 @@ app.get("/api/teamStageStats", async (req, res) => {
        JOIN products p ON p.id = a.product_id
        LEFT JOIN stage_entries se ON se.product_id = a.product_id AND se.stage_key = a.stage
        WHERE ${conditions.join(" AND ")}`,
-      params
+      params,
     );
-  const buildGroup = (stageKeys) => {
-    const byMember = {};
-    rows.forEach(r => {
-      if (!stageKeys.includes(r.stage)) return;
-      const acc = (byMember[r.member_id] ||= { memberName: r.member_name, skus: new Set(), skuStage: {} });
+    const buildGroup = (stageKeys) => {
+      const byMember = {};
+      rows.forEach((r) => {
+        if (!stageKeys.includes(r.stage)) return;
+        const acc = (byMember[r.member_id] ||= {
+          memberName: r.member_name,
+          skus: new Set(),
+          skuStage: {},
+        });
 
-      acc.skus.add(r.sku);
-      // Remember status per sku+stage instead of tallying immediately —
-      // we don't yet know which skus will survive the manager/report subtraction.
-      (acc.skuStage[r.sku] ||= {})[r.stage] = r.stage_status;
-    });
-
-    // Subtract reports' skus from their manager's set — same as totalAssigned.
-    Object.keys(byMember).forEach(managerId => {
-      const reportIds = Object.keys(byMember).filter(id => managerIdOf[id] === managerId);
-      if (reportIds.length === 0) return;
-      const managerSkus = byMember[managerId].skus;
-      reportIds.forEach(repId => {
-        byMember[repId].skus.forEach(sku => managerSkus.delete(sku));
+        acc.skus.add(r.sku);
+        // Remember status per sku+stage instead of tallying immediately —
+        // we don't yet know which skus will survive the manager/report subtraction.
+        (acc.skuStage[r.sku] ||= {})[r.stage] = r.stage_status;
       });
-    });
 
-    return Object.entries(byMember)
-      .map(([memberId, m]) => {
-        const perStage = stageKeys.reduce((o, k) => ({ ...o, [k]: { completed: 0, pending: 0, issue: 0 } }), {});
-        m.skus.forEach(sku => {
-          const stagesForSku = m.skuStage[sku] || {};
-          stageKeys.forEach(stageKey => {
-            if (!(stageKey in stagesForSku)) return;
-            const status = stagesForSku[stageKey];
-            if (status === "Completed") perStage[stageKey].completed++;
-            else if (status === "Issue") perStage[stageKey].issue++;
-            else perStage[stageKey].pending++;
+      // Subtract reports' skus from their manager's set — same as totalAssigned.
+      Object.keys(byMember).forEach((managerId) => {
+        const reportIds = Object.keys(byMember).filter(
+          (id) => managerIdOf[id] === managerId,
+        );
+        if (reportIds.length === 0) return;
+        const managerSkus = byMember[managerId].skus;
+        reportIds.forEach((repId) => {
+          byMember[repId].skus.forEach((sku) => managerSkus.delete(sku));
+        });
+      });
+
+      return Object.entries(byMember)
+        .map(([memberId, m]) => {
+          const perStage = stageKeys.reduce(
+            (o, k) => ({ ...o, [k]: { completed: 0, pending: 0, issue: 0 } }),
+            {},
+          );
+          m.skus.forEach((sku) => {
+            const stagesForSku = m.skuStage[sku] || {};
+            stageKeys.forEach((stageKey) => {
+              if (!(stageKey in stagesForSku)) return;
+              const status = stagesForSku[stageKey];
+              if (status === "Completed") perStage[stageKey].completed++;
+              else if (status === "Issue") perStage[stageKey].issue++;
+              else perStage[stageKey].pending++;
+            });
           });
-        });
 
-        // A stage with zero completed/pending/issue means this member was
-        // never assigned that stage on any of their cards — mark it null so
-        // the frontend can show "—" instead of misleading zeros.
-        stageKeys.forEach(k => {
-          const s = perStage[k];
-          if (s.completed + s.pending + s.issue === 0) perStage[k] = null;
-        });
+          // A stage with zero completed/pending/issue means this member was
+          // never assigned that stage on any of their cards — mark it null so
+          // the frontend can show "—" instead of misleading zeros.
+          stageKeys.forEach((k) => {
+            const s = perStage[k];
+            if (s.completed + s.pending + s.issue === 0) perStage[k] = null;
+          });
 
-        return {
-          memberId,
-          memberName: m.memberName,
-          totalAssigned: m.skus.size,
-          perStage,
-        };
-      })
-      .sort((a, b) => b.totalAssigned - a.totalAssigned);
-  };
+          return {
+            memberId,
+            memberName: m.memberName,
+            totalAssigned: m.skus.size,
+            perStage,
+          };
+        })
+        .sort((a, b) => b.totalAssigned - a.totalAssigned);
+    };
 
     res.json({
       ok: true,
@@ -1526,7 +1883,6 @@ app.get("/api/teamStageStats", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 
 // /* ----------------------------------------------------------------
 //    GET /api/effectiveMemberStagePipeline?division=KOC Cards
@@ -1541,14 +1897,14 @@ app.get("/api/teamStageStats", async (req, res) => {
 //    in your original query). Pass it to scope to just one division.
 // ---------------------------------------------------------------- */
 app.get("/api/memberStageDetail", async (req, res) => {
-  const { division } = req.query;
+  const { division, completedFrom, completedTo } = req.query;
 
   try {
     const { rows } = await pool.query(
       `
       WITH target_assignments AS (
           SELECT DISTINCT a.member_id, a.manager_id, a.division, a.stage AS assigned_stage,
-                 p.id AS product_id, a.sku
+                p.id AS product_id, a.sku, a.assigned_at
           FROM assignments a
           JOIN products p ON p.sku = a.sku AND p.division = a.division
           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
@@ -1560,7 +1916,7 @@ app.get("/api/memberStageDetail", async (req, res) => {
           WHERE manager_id IS NOT NULL AND manager_id != member_id
       ),
       effective AS (
-          SELECT DISTINCT ta.member_id, ta.division, ta.assigned_stage, ta.product_id, ta.sku
+          SELECT DISTINCT ta.member_id, ta.division, ta.assigned_stage, ta.product_id, ta.sku, ta.assigned_at
           FROM target_assignments ta
           WHERE NOT EXISTS (
               SELECT 1 FROM pushed p
@@ -1575,20 +1931,36 @@ app.get("/api/memberStageDetail", async (req, res) => {
               e.member_id,
               e.division,
               e.assigned_stage AS stage,
+              MAX(e.assigned_at) AS last_assigned_at,
+              -- Completion is the only thing that gets date-scoped. When
+              -- $2/$3 are NULL (no filter set), the range check is skipped
+              -- entirely, so this behaves exactly like the live/unfiltered
+              -- query did before.
+              MAX(se.updated_at) FILTER (
+                  WHERE se.status = 'Completed'
+                    AND ($2::timestamptz IS NULL OR se.updated_at >= $2::timestamptz)
+                    AND ($3::timestamptz IS NULL OR se.updated_at < $3::timestamptz)
+              ) AS last_completed_at,
               COUNT(DISTINCT e.sku) AS assigned_skus,
-              COUNT(DISTINCT e.sku) FILTER (WHERE se.status = 'Completed') AS completed_skus,
+              COUNT(DISTINCT e.sku) FILTER (
+                  WHERE se.status = 'Completed'
+                    AND ($2::timestamptz IS NULL OR se.updated_at >= $2::timestamptz)
+                    AND ($3::timestamptz IS NULL OR se.updated_at < $3::timestamptz)
+              ) AS completed_skus,
+              -- Pending/issue always reflect the current live state — these
+              -- are "right now" concepts, not date-windowed ones.
               COUNT(DISTINCT e.sku) FILTER (
                   WHERE se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%'
               ) AS in_progress_skus,
               COUNT(DISTINCT e.sku) FILTER (WHERE se.status = 'Not Started') AS not_started_skus,
               COUNT(DISTINCT e.sku) FILTER (
                   WHERE se.status = 'Issue'
-                     OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+                    OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
               ) AS issue_skus
           FROM effective e
           LEFT JOIN stage_entries se
               ON se.product_id = e.product_id
-             AND se.stage_key = e.assigned_stage
+            AND se.stage_key = e.assigned_stage
           GROUP BY e.member_id, e.division, e.assigned_stage
       ),
       totals AS (
@@ -1602,6 +1974,8 @@ app.get("/api/memberStageDetail", async (req, res) => {
           t.division,
           t.total_assigned_skus,
           ps.stage,
+          ps.last_assigned_at,
+          ps.last_completed_at,
           ps.assigned_skus,
           ps.completed_skus,
           ps.in_progress_skus,
@@ -1612,13 +1986,13 @@ app.get("/api/memberStageDetail", async (req, res) => {
       JOIN per_stage ps ON ps.member_id = t.member_id AND ps.division = t.division
       ORDER BY t.division, u.name, ps.stage
       `,
-      [division || null]
+      [division || null, completedFrom || null, completedTo || null],
     );
 
     // Reshape flat rows into a nested per-member structure, same spirit
     // as your other stats endpoints (allMemberStats / teamStageStats).
     const byKey = {};
-    rows.forEach(r => {
+    rows.forEach((r) => {
       const key = r.member_id + "||" + r.division;
       if (!byKey[key]) {
         byKey[key] = {
@@ -1631,6 +2005,12 @@ app.get("/api/memberStageDetail", async (req, res) => {
       }
       byKey[key].stages.push({
         stage: r.stage,
+        assignedAt: r.last_assigned_at
+          ? new Date(r.last_assigned_at).toISOString()
+          : null,
+        completedAt: r.last_completed_at
+          ? new Date(r.last_completed_at).toISOString()
+          : null,
         assignedSkus: Number(r.assigned_skus),
         completedSkus: Number(r.completed_skus),
         inProgressSkus: Number(r.in_progress_skus),
@@ -1649,9 +2029,6 @@ app.get("/api/memberStageDetail", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-
-
 
 // app.get("/api/memberStageDetail", async (req, res) => {
 //   const { division } = req.query;
@@ -1771,7 +2148,423 @@ app.get("/api/memberStageDetail", async (req, res) => {
 //   }
 // });
 
+/* ----------------------------------------------------------------
+   GET /api/memberDailyActivity?person=dharani&division=KOC Cards&from=2026-08-24&to=2026-08-27
+   Day-by-day completed-stage activity for one person, based on who
+   actually touched the row (stage_entries.person), not assignments.
+---------------------------------------------------------------- */
+app.get("/api/memberDailyActivity", async (req, res) => {
+  const { person, division, from, to } = req.query;
+  if (!person)
+    return res.status(400).json({ ok: false, error: "person required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         date_trunc('day', se.updated_at) AS work_date,
+         se.stage_key,
+         COUNT(*) AS completed_count,
+         array_agg(p.sku ORDER BY se.updated_at) AS skus
+       FROM stage_entries se
+       JOIN products p ON p.id = se.product_id
+       WHERE se.person ILIKE $1
+         AND se.status = 'Completed'
+         AND ($2::division_name IS NULL OR p.division = $2::division_name)
+         AND ($3::timestamptz IS NULL OR se.updated_at >= $3::timestamptz)
+         AND ($4::timestamptz IS NULL OR se.updated_at < $4::timestamptz)
+       GROUP BY work_date, se.stage_key
+       ORDER BY work_date, se.stage_key`,
+      [person, division || null, from || null, to || null],
+    );
+    res.json({
+      ok: true,
+      rows: rows.map((r) => ({
+        date: r.work_date.toISOString().slice(0, 10),
+        stage: r.stage_key,
+        completed: Number(r.completed_count),
+        skus: r.skus,
+      })),
+    });
+  } catch (e) {
+    console.error("memberDailyActivity error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
+/* ----------------------------------------------------------------
+   GET /api/teamStageActivity?division=KOC Cards&from=2026-08-24&to=2026-08-27
+   Per-member, per-stage COMPLETED counts within a date range, based on
+   who actually completed the work (stage_entries.person + updated_at).
+   Used by Speed Analytics > Full Breakdown when a date filter is active.
+---------------------------------------------------------------- */
+app.get("/api/teamStageActivity", async (req, res) => {
+  const { division, from, to } = req.query;
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         se.person AS member_name,
+         se.stage_key,
+         COUNT(*) AS completed_count
+       FROM stage_entries se
+       JOIN products p ON p.id = se.product_id
+       WHERE p.division = $1
+         AND se.status = 'Completed'
+         AND se.person IS NOT NULL AND se.person != ''
+         AND ($2::timestamptz IS NULL OR se.updated_at >= $2::timestamptz)
+         AND ($3::timestamptz IS NULL OR se.updated_at < $3::timestamptz)
+       GROUP BY se.person, se.stage_key
+       ORDER BY se.person, se.stage_key`,
+      [division, from || null, to || null],
+    );
+
+    // Distinct cards touched per person in this window — a card counted once
+    // even if the person completed multiple stages on it.
+    const { rows: totalsRows } = await pool.query(
+      `SELECT se.person AS member_name, COUNT(DISTINCT p.id) AS total_cards
+       FROM stage_entries se
+       JOIN products p ON p.id = se.product_id
+       WHERE p.division = $1
+         AND se.status = 'Completed'
+         AND se.person IS NOT NULL AND se.person != ''
+         AND ($2::timestamptz IS NULL OR se.updated_at >= $2::timestamptz)
+         AND ($3::timestamptz IS NULL OR se.updated_at < $3::timestamptz)
+       GROUP BY se.person`,
+      [division, from || null, to || null],
+    );
+    const totalsByPerson = {};
+    totalsRows.forEach((r) => {
+      totalsByPerson[r.member_name] = Number(r.total_cards);
+    });
+
+    const byMember = {};
+    rows.forEach((r) => {
+      if (!byMember[r.member_name]) {
+        byMember[r.member_name] = {
+          memberName: r.member_name,
+          totalCards: totalsByPerson[r.member_name] || 0,
+          stages: [],
+        };
+      }
+      byMember[r.member_name].stages.push({
+        stage: r.stage_key,
+        completedSkus: Number(r.completed_count),
+        inProgressSkus: 0,
+        notStartedSkus: 0,
+        issueSkus: 0,
+      });
+    });
+
+    res.json({ ok: true, members: Object.values(byMember) });
+  } catch (e) {
+    console.error("teamStageActivity error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/store-list", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT store_name FROM store_list ORDER BY store_name",
+    );
+    res.json({ ok: true, stores: rows.map((r) => r.store_name) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/store-list — for populating the branch dropdown
+---------------------------------------------------------------- */
+app.get("/api/store-list", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT store_name FROM store_list ORDER BY store_name",
+    );
+    res.json({ ok: true, stores: rows.map((r) => r.store_name) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   POST /api/dispatch/admin-upload — admin's reference set (set_number = 1)
+   body: { division, vendor, batchLabel, uploadedBy, filename, skus: [{sku, qty}] }
+---------------------------------------------------------------- */
+app.post("/api/dispatch/admin-upload", async (req, res) => {
+  const { division, vendor, batchLabel, uploadedBy, filename, skus } = req.body;
+  if (
+    !division ||
+    !vendor ||
+    !batchLabel ||
+    !Array.isArray(skus) ||
+    skus.length === 0
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error: "division, vendor, batchLabel and skus[] required",
+    });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows: vcheck } = await client.query(
+      "SELECT 1 FROM vendors WHERE division = $1 AND vendor_name = $2",
+      [division, vendor],
+    );
+    if (vcheck.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `Vendor "${vendor}" not found for ${division} — add it under Products first.`,
+      });
+    }
+
+    const { rows } = await client.query(
+      `INSERT INTO dispatch_batches (division, vendor, batch_label, set_number, branch_name, uploaded_by, source_filename)
+       VALUES ($1,$2,$3,1,NULL,$4,$5)
+       ON CONFLICT (division, vendor, batch_label, set_number)
+       DO UPDATE SET uploaded_by = $4, source_filename = $5, updated_at = now()
+       RETURNING id`,
+      [
+        division,
+        vendor,
+        batchLabel,
+        uploadedBy || "Unattributed",
+        filename || null,
+      ],
+    );
+    const batchId = rows[0].id;
+
+    await client.query("DELETE FROM dispatch_batch_items WHERE batch_id = $1", [
+      batchId,
+    ]);
+    const cleanSkus = [
+      ...new Set(skus.map((s) => String(s.sku || s).trim()).filter(Boolean)),
+    ];
+    const qtyMap = {};
+    skus.forEach((s) => {
+      const k = String(s.sku || s).trim();
+      if (k) qtyMap[k] = Number(s.qty) || 1;
+    });
+    if (cleanSkus.length > 0) {
+      await client.query(
+        `INSERT INTO dispatch_batch_items (batch_id, sku, qty)
+         SELECT $1, s, q FROM unnest($2::text[], $3::int[]) AS t(s, q)`,
+        [batchId, cleanSkus, cleanSkus.map((s) => qtyMap[s] || 1)],
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true, batchId, setNumber: 1, skuCount: cleanSkus.length });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("admin-upload error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* ----------------------------------------------------------------
+   POST /api/dispatch/branch-upload — branch's received set (auto set_number)
+   body: { division, vendor, batchLabel, branchName, uploadedBy, filename, skus: [{sku, qty}] }
+---------------------------------------------------------------- */
+app.post("/api/dispatch/branch-upload", async (req, res) => {
+  const {
+    division,
+    vendor,
+    batchLabel,
+    branchName,
+    uploadedBy,
+    filename,
+    skus,
+  } = req.body;
+  if (
+    !division ||
+    !vendor ||
+    !batchLabel ||
+    !branchName ||
+    !Array.isArray(skus) ||
+    skus.length === 0
+  ) {
+    return res.status(400).json({
+      ok: false,
+      error: "division, vendor, batchLabel, branchName and skus[] required",
+    });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows: vcheck } = await client.query(
+      "SELECT 1 FROM vendors WHERE division = $1 AND vendor_name = $2",
+      [division, vendor],
+    );
+    if (vcheck.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `Vendor "${vendor}" not found for ${division}.`,
+      });
+    }
+    const { rows: scheck } = await client.query(
+      "SELECT 1 FROM store_list WHERE store_name = $1",
+      [branchName],
+    );
+    if (scheck.length === 0) {
+      await client.query("ROLLBACK");
+      return res
+        .status(400)
+        .json({ ok: false, error: `Unknown branch "${branchName}".` });
+    }
+
+    const { rows: existing } = await client.query(
+      `SELECT id, set_number FROM dispatch_batches
+       WHERE division=$1 AND vendor=$2 AND batch_label=$3 AND branch_name=$4`,
+      [division, vendor, batchLabel, branchName],
+    );
+
+    let batchId, setNumber;
+    if (existing.length > 0) {
+      batchId = existing[0].id;
+      setNumber = existing[0].set_number;
+      await client.query(
+        `UPDATE dispatch_batches SET uploaded_by=$2, source_filename=$3, updated_at=now() WHERE id=$1`,
+        [batchId, uploadedBy || "Unattributed", filename || null],
+      );
+    } else {
+      const { rows: maxRow } = await client.query(
+        `SELECT COALESCE(MAX(set_number), 1) AS mx FROM dispatch_batches
+         WHERE division=$1 AND vendor=$2 AND batch_label=$3`,
+        [division, vendor, batchLabel],
+      );
+      setNumber = Number(maxRow[0].mx) + 1;
+      const { rows: ins } = await client.query(
+        `INSERT INTO dispatch_batches (division, vendor, batch_label, set_number, branch_name, uploaded_by, source_filename)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [
+          division,
+          vendor,
+          batchLabel,
+          setNumber,
+          branchName,
+          uploadedBy || "Unattributed",
+          filename || null,
+        ],
+      );
+      batchId = ins[0].id;
+    }
+
+    await client.query("DELETE FROM dispatch_batch_items WHERE batch_id = $1", [
+      batchId,
+    ]);
+    const cleanSkus = [
+      ...new Set(skus.map((s) => String(s.sku || s).trim()).filter(Boolean)),
+    ];
+    const qtyMap = {};
+    skus.forEach((s) => {
+      const k = String(s.sku || s).trim();
+      if (k) qtyMap[k] = Number(s.qty) || 1;
+    });
+    if (cleanSkus.length > 0) {
+      await client.query(
+        `INSERT INTO dispatch_batch_items (batch_id, sku, qty)
+         SELECT $1, s, q FROM unnest($2::text[], $3::int[]) AS t(s, q)`,
+        [batchId, cleanSkus, cleanSkus.map((s) => qtyMap[s] || 1)],
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true, batchId, setNumber, skuCount: cleanSkus.length });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("branch-upload error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/dispatch/comparison?division=&vendor=&batchLabel=
+---------------------------------------------------------------- */
+app.get("/api/dispatch/comparison", async (req, res) => {
+  const { division, vendor, batchLabel } = req.query;
+  if (!division || !vendor || !batchLabel)
+    return res
+      .status(400)
+      .json({ ok: false, error: "division, vendor, batchLabel required" });
+  try {
+    const { rows: batches } = await pool.query(
+      `SELECT b.id, b.set_number, b.branch_name, b.uploaded_by, b.uploaded_at,
+              array_agg(DISTINCT i.sku) FILTER (WHERE i.sku IS NOT NULL) AS skus
+       FROM dispatch_batches b
+       LEFT JOIN dispatch_batch_items i ON i.batch_id = b.id
+       WHERE b.division=$1 AND b.vendor=$2 AND b.batch_label=$3
+       GROUP BY b.id
+       ORDER BY b.set_number ASC`,
+      [division, vendor, batchLabel],
+    );
+    const ref = batches.find((b) => b.set_number === 1);
+    if (!ref) return res.json({ ok: true, reference: null, branches: [] });
+    const refSkus = new Set((ref.skus || []).map((s) => s.toLowerCase()));
+
+    const branchResults = batches
+      .filter((b) => b.set_number !== 1)
+      .map((b) => {
+        const branchSkus = new Set((b.skus || []).map((s) => s.toLowerCase()));
+        const missing = [...refSkus].filter((s) => !branchSkus.has(s));
+        const extra = [...branchSkus].filter((s) => !refSkus.has(s));
+        return {
+          setNumber: b.set_number,
+          branchName: b.branch_name,
+          uploadedBy: b.uploaded_by,
+          uploadedAt: b.uploaded_at,
+          totalReceived: branchSkus.size,
+          totalExpected: refSkus.size,
+          matched: refSkus.size - missing.length,
+          missingSkus: missing,
+          extraSkus: extra,
+          allMatching: missing.length === 0 && extra.length === 0,
+        };
+      });
+
+    res.json({
+      ok: true,
+      reference: {
+        setNumber: 1,
+        uploadedBy: ref.uploaded_by,
+        uploadedAt: ref.uploaded_at,
+        total: refSkus.size,
+      },
+      branches: branchResults,
+    });
+  } catch (e) {
+    console.error("dispatch comparison error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/dispatch/groups?division=
+---------------------------------------------------------------- */
+app.get("/api/dispatch/groups", async (req, res) => {
+  const { division } = req.query;
+  if (!division)
+    return res.status(400).json({ ok: false, error: "division required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT vendor, batch_label, COUNT(*) FILTER (WHERE set_number = 1) > 0 AS has_reference,
+              COUNT(*) FILTER (WHERE set_number != 1) AS branch_count
+       FROM dispatch_batches WHERE division = $1
+       GROUP BY vendor, batch_label ORDER BY vendor, batch_label DESC`,
+      [division],
+    );
+    res.json({ ok: true, groups: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
