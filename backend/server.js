@@ -1897,7 +1897,7 @@ app.get("/api/teamStageStats", async (req, res) => {
 //    in your original query). Pass it to scope to just one division.
 // ---------------------------------------------------------------- */
 app.get("/api/memberStageDetail", async (req, res) => {
-  const { division, completedFrom, completedTo } = req.query;
+  const { division, completedFrom, completedTo, vendor } = req.query;
 
   try {
     const { rows } = await pool.query(
@@ -1909,6 +1909,7 @@ app.get("/api/memberStageDetail", async (req, res) => {
           JOIN products p ON p.sku = a.sku AND p.division = a.division
           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
             AND ($1::division_name IS NULL OR a.division = $1::division_name)
+            AND ($4::text IS NULL OR p.vendor = $4::text)
       ),
       pushed AS (
           SELECT DISTINCT manager_id, division, assigned_stage, sku
@@ -1986,7 +1987,12 @@ app.get("/api/memberStageDetail", async (req, res) => {
       JOIN per_stage ps ON ps.member_id = t.member_id AND ps.division = t.division
       ORDER BY t.division, u.name, ps.stage
       `,
-      [division || null, completedFrom || null, completedTo || null],
+      [
+        division || null,
+        completedFrom || null,
+        completedTo || null,
+        vendor || null,
+      ],
     );
 
     // Reshape flat rows into a nested per-member structure, same spirit
