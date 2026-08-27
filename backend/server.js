@@ -2572,6 +2572,110 @@ app.get("/api/dispatch/groups", async (req, res) => {
   }
 });
 
+/* ----------------------------------------------------------------
+   DELETE /api/dispatch/batch   body: { batchId }
+   Removes one batch (admin reference OR a specific branch upload)
+   and all its SKU items. Use to fix mistakes like wrong branch/vendor.
+---------------------------------------------------------------- */
+app.post("/api/dispatch/delete-batch", async (req, res) => {
+  const { batchId } = req.body;
+  if (!batchId)
+    return res.status(400).json({ ok: false, error: "batchId required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM dispatch_batch_items WHERE batch_id = $1", [
+      batchId,
+    ]);
+    const { rows } = await client.query(
+      "DELETE FROM dispatch_batches WHERE id = $1 RETURNING *",
+      [batchId],
+    );
+    await client.query("COMMIT");
+    if (!rows.length)
+      return res.status(404).json({ ok: false, error: "Batch not found" });
+    res.json({ ok: true, deleted: rows[0] });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("delete-batch error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/dispatch/batches?division=&vendor=&batchLabel=
+   Lists every set (admin ref + all branches) for a batch, with ids
+   so the frontend can offer delete/manage actions.
+---------------------------------------------------------------- */
+app.get("/api/dispatch/batches", async (req, res) => {
+  const { division, vendor, batchLabel } = req.query;
+  if (!division || !vendor || !batchLabel)
+    return res
+      .status(400)
+      .json({ ok: false, error: "division, vendor, batchLabel required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT b.id, b.set_number, b.branch_name, b.uploaded_by, b.uploaded_at,
+              COUNT(i.sku) AS sku_count
+       FROM dispatch_batches b
+       LEFT JOIN dispatch_batch_items i ON i.batch_id = b.id
+       WHERE b.division=$1 AND b.vendor=$2 AND b.batch_label=$3
+       GROUP BY b.id
+       ORDER BY b.set_number ASC`,
+      [division, vendor, batchLabel],
+    );
+    res.json({ ok: true, batches: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   POST /api/dispatch/rename-batch
+   body: { division, vendor, oldBatchLabel, newBatchLabel }
+   Renames every set (admin ref + all branches) under one batch label
+   at once, since they're grouped together by (division, vendor, batch_label).
+---------------------------------------------------------------- */
+app.post("/api/dispatch/rename-batch", async (req, res) => {
+  const { division, vendor, oldBatchLabel, newBatchLabel } = req.body;
+  if (!division || !vendor || !oldBatchLabel || !newBatchLabel) {
+    return res.status(400).json({
+      ok: false,
+      error: "division, vendor, oldBatchLabel, newBatchLabel required",
+    });
+  }
+  if (oldBatchLabel === newBatchLabel) {
+    return res
+      .status(400)
+      .json({ ok: false, error: "New label is the same as the old one" });
+  }
+  try {
+    // Prevent silently merging into an already-existing different batch
+    const { rows: clash } = await pool.query(
+      `SELECT 1 FROM dispatch_batches WHERE division=$1 AND vendor=$2 AND batch_label=$3 LIMIT 1`,
+      [division, vendor, newBatchLabel],
+    );
+    if (clash.length > 0) {
+      return res.status(400).json({
+        ok: false,
+        error: `A batch named "${newBatchLabel}" already exists for this vendor — pick a different name or delete it first.`,
+      });
+    }
+    const { rows } = await pool.query(
+      `UPDATE dispatch_batches SET batch_label = $4, updated_at = now()
+       WHERE division=$1 AND vendor=$2 AND batch_label=$3
+       RETURNING id`,
+      [division, vendor, oldBatchLabel, newBatchLabel],
+    );
+    res.json({ ok: true, renamed: rows.length });
+  } catch (e) {
+    console.error("rename-batch error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
 });
