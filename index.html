@@ -1972,6 +1972,26 @@
       setTab("qcaudit");
     };
     const [navOpen, setNavOpen] = useState(false);
+
+    const [hoveredDivision, setHoveredDivision] = useState(null);
+    const hoverCloseTimer = useRef(null);
+    const openVendorFlyout = (d) => {
+      if (hoverCloseTimer.current) { clearTimeout(hoverCloseTimer.current); hoverCloseTimer.current = null; }
+      setHoveredDivision(d);
+    };
+    const scheduleCloseVendorFlyout = () => {
+      if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = setTimeout(() => setHoveredDivision(null), 350);
+    };
+    const [analyticsFilter, setAnalyticsFilter] = useState(null);
+    const goToAnalyticsVendor = (vendor) => {
+      if (hoverCloseTimer.current) { clearTimeout(hoverCloseTimer.current); hoverCloseTimer.current = null; }
+      setHoveredDivision(null);
+      setDivision("Bombay Cards");
+      setAnalyticsFilter({ vendor });
+      setTab("analytics");
+      setNavOpen(false);
+    };
     const [auth, setAuth] = useState(() => {
       try {
         const raw = sessionStorage.getItem("ct:auth") || localStorage.getItem("ct:auth");
@@ -2483,10 +2503,52 @@
           </div>
           <div className="navlabel">Division</div>
           {DIVISIONS.map(d => (
-            <button key={d} className={"divbtn" + (division === d ? " on" : "")} onClick={() => { setDivision(d); setNavOpen(false); }}>
-              <span className="dmark">{d[0]}</span>{d}<span className="dcount">{counts[d] || 0}</span>
-            </button>
-          ))}
+            <div
+                  key={d}
+                  style={{ position: "relative" }}
+                  onMouseEnter={() => d === "Bombay Cards" && openVendorFlyout(d)}
+                  onMouseLeave={() => d === "Bombay Cards" && scheduleCloseVendorFlyout()}
+                >
+                  <button className={"divbtn" + (division === d ? " on" : "")} onClick={() => { setDivision(d); setNavOpen(false); }}>
+                    <span className="dmark">{d[0]}</span>{d}<span className="dcount">{counts[d] || 0}</span>
+                  </button>
+
+                  {d === "Bombay Cards" && hoveredDivision === d && (
+                    <div
+                      onMouseEnter={() => openVendorFlyout(d)}
+                      onMouseLeave={() => scheduleCloseVendorFlyout()}
+                      style={{
+                        position: "absolute", left: "100%", top: 0,
+                        paddingLeft: 8, zIndex: 50
+                      }}
+                    >
+                      <div style={{
+                        background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 10,
+                        boxShadow: "var(--shadow-lg)", minWidth: 210, maxHeight: 340, overflowY: "auto", padding: 6
+                      }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--faint)", padding: "4px 8px 6px", textTransform: "uppercase", letterSpacing: ".5px" }}>
+                          Vendors
+                        </div>
+                        {(vendors["Bombay Cards"] || DEFAULT_VENDORS["Bombay Cards"] || []).map(v => (
+                          <button
+                            key={v}
+                            onClick={() => goToAnalyticsVendor(v)}
+                            style={{
+                              display: "block", width: "100%", textAlign: "left", padding: "7px 10px",
+                              borderRadius: 8, fontSize: 12.5, color: "var(--ink)", background: "transparent",
+                              fontWeight: 500, cursor: "pointer"
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
+                            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                          >
+                            {v}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
           <div className="navlabel">Workspace</div>
           {NAV.map(([k, n, ic]) => (
             <button key={k} className={"navitem" + (tab === k ? " on" : "")} onClick={() => { setTab(k); setNavOpen(false); }}>
@@ -2538,7 +2600,7 @@
             {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
             {tab === "qcaudit" && <QCAuditTab division={division} products={divProducts} qcAuditLog={qcAuditLog} onSubmit={submitQCAudit} operator={operator} auth={auth} initialFilter={qcAuditFilter} onFilterConsumed={() => setQcAuditFilter(null)} />}
             {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
-            {tab === "analytics" && <SpeedAnalytics division={division} auth={auth} teamMembers={teamMembers} assignments={assignments} products={divProducts} />}
+            {tab === "analytics" && <SpeedAnalytics division={division} auth={auth} teamMembers={teamMembers} assignments={assignments} products={divProducts} initialFilter={analyticsFilter} onFilterConsumed={() => setAnalyticsFilter(null)} />}
           </div>
         </main>
       </div>
@@ -8238,7 +8300,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
   //       </div>
   //     );
   //   }
-  function SpeedAnalytics({ division, auth, teamMembers = [], assignments = [], products = [] }) {
+  function SpeedAnalytics({ division, auth, teamMembers = [], assignments = [], products = [], initialFilter = null, onFilterConsumed }) {
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [subTab, setSubTab] = useState("overview"); // "overview" | "team"
 
@@ -8251,6 +8313,14 @@ const PHOTO_VIDEO_STAGE_GROUP = [
     const [fAssignedTo, setFAssignedTo] = useState("");
     const [fCompletedFrom, setFCompletedFrom] = useState("");
     const [fCompletedTo, setFCompletedTo] = useState("");
+
+    useEffect(() => {
+      if (initialFilter?.vendor) {
+        setFVendor(initialFilter.vendor);
+        setSubTab("full");
+        onFilterConsumed && onFilterConsumed();
+      }
+    }, [initialFilter]);
 
     const productBySku = useMemo(() => {
       const map = {};
