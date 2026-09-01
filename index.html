@@ -8339,42 +8339,42 @@ const PHOTO_VIDEO_STAGE_GROUP = [
 
     const [teamStats, setTeamStats] = useState({ backendTeam: [], photoTeam: [] });
     const [teamLoading, setTeamLoading] = useState(false);
-// --- Full per-member × per-stage breakdown (ALL stages, not just backend/photo groups) ---
-const [fullBreakdown, setFullBreakdown] = useState({ members: [] });
-const [fullLoading, setFullLoading] = useState(false);
+    // --- Full per-member × per-stage breakdown (ALL stages, not just backend/photo groups) ---
+    const [fullBreakdown, setFullBreakdown] = useState({ members: [] });
+    const [fullLoading, setFullLoading] = useState(false);
 
-useEffect(() => {
-  if (!isMasterOrAdmin || subTab !== "full") return;
-  setFullLoading(true);
-  const params = new URLSearchParams({ division });
-  if (fVendor) params.set("vendor", fVendor);
-  if (fSetNo) params.set("set_no", fSetNo);
-  if (fCompletedFrom) params.set("completedFrom", fCompletedFrom);
-  if (fCompletedTo) params.set("completedTo", fCompletedTo);
-  // Note: fAssignedFrom/fAssignedTo are intentionally NOT sent — "Total
-  // Assigned" always reflects the live/current count per the backend fix.
+    useEffect(() => {
+      if (!isMasterOrAdmin || subTab !== "full") return;
+      setFullLoading(true);
+      const params = new URLSearchParams({ division });
+      if (fVendor) params.set("vendor", fVendor);
+      if (fSetNo) params.set("set_no", fSetNo);
+      if (fCompletedFrom) params.set("completedFrom", fCompletedFrom);
+      if (fCompletedTo) params.set("completedTo", fCompletedTo);
+      // Note: fAssignedFrom/fAssignedTo are intentionally NOT sent — "Total
+      // Assigned" always reflects the live/current count per the backend fix.
 
-  fetch(`${API}/api/memberStageDetail?${params.toString()}`)
-    .then(async r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const ct = r.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) throw new Error("Endpoint not implemented on backend");
-      return r.json();
-    })
-    .then(data => { if (data.ok) setFullBreakdown({ members: data.members || [] }); })
-    .catch(e => {
-      console.warn("memberStageDetail unavailable:", e.message);
-      setFullBreakdown({ members: [] });
-    })
-    .finally(() => setFullLoading(false));
-}, [division, fVendor, fSetNo, fCompletedFrom, fCompletedTo, subTab, isMasterOrAdmin]);
+      fetch(`${API}/api/memberStageDetail?${params.toString()}`)
+        .then(async r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const ct = r.headers.get("content-type") || "";
+          if (!ct.includes("application/json")) throw new Error("Endpoint not implemented on backend");
+          return r.json();
+        })
+        .then(data => { if (data.ok) setFullBreakdown({ members: data.members || [] }); })
+        .catch(e => {
+          console.warn("memberStageDetail unavailable:", e.message);
+          setFullBreakdown({ members: [] });
+        })
+        .finally(() => setFullLoading(false));
+    }, [division, fVendor, fSetNo, fCompletedFrom, fCompletedTo, subTab, isMasterOrAdmin]);
 
-// Union of every stage key present across all members, kept in pipeline order
-const fullStageOrder = useMemo(() => {
-  const present = new Set();
-  fullBreakdown.members.forEach(m => (m.stages || []).forEach(s => present.add(s.stage)));
-  return STAGES.filter(s => present.has(s.k)).map(s => ({ k: s.k, n: s.n }));
-}, [fullBreakdown]);
+    // Union of every stage key present across all members, kept in pipeline order
+    const fullStageOrder = useMemo(() => {
+      const present = new Set();
+      fullBreakdown.members.forEach(m => (m.stages || []).forEach(s => present.add(s.stage)));
+      return STAGES.filter(s => present.has(s.k)).map(s => ({ k: s.k, n: s.n }));
+    }, [fullBreakdown]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const canvasRef = useRef(null);
@@ -8425,43 +8425,55 @@ const fullStageOrder = useMemo(() => {
       { k: "videoedit", n: "Video Editing" },
     ];
     const [kpiExporting, setKpiExporting] = useState("");
+    const downloadKpiExcel = async (scope, label) => {
+      setKpiExporting(scope);
+      try {
+        const params = new URLSearchParams({ division, scope });
+        const res = await fetch(`${API}/api/exportProducts?${params.toString()}`);
+        const data = await res.json();
+        if (!data.ok) { alert("Export failed: " + (data.error || "unknown error")); return; }
+        const headers = ["SKU", "Name", "Vendor", "Qty", "Verdict", "Next Pending Stage", "Last Updated"];
+        const rows = data.rows.map(r => [r.sku, r.name || "", r.vendor || "", r.qty || 0, r.verdict || "", r.next_pending_stage || "", r.updated_at ? fmt(r.updated_at) : ""]);
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        ws["!cols"] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, label);
+        XLSX.writeFile(wb, `${division}_${label}_${scope}.xlsx`);
+      } catch (e) {
+        console.error("downloadKpiExcel error", e);
+        alert("Export failed — check console.");
+      } finally {
+        setKpiExporting("");
+      }
+    };
 
-const downloadKpiExcel = async (scope, label) => {
-  setKpiExporting(scope);
-  try {
-    const params = new URLSearchParams({ division, scope });
-    const res = await fetch(`${API}/api/exportProducts?${params.toString()}`);
-    const data = await res.json();
-    if (!data.ok) { alert("Export failed: " + (data.error || "unknown error")); return; }
-    const headers = ["SKU", "Name", "Vendor", "Qty", "Verdict", "Next Pending Stage", "Last Updated"];
-    const rows = data.rows.map(r => [r.sku, r.name || "", r.vendor || "", r.qty || 0, r.verdict || "", r.next_pending_stage || "", r.updated_at ? fmt(r.updated_at) : ""]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws["!cols"] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, label);
-    XLSX.writeFile(wb, `${division}_${label}_${scope}.xlsx`);
-  } catch (e) {
-    console.error("downloadKpiExcel error", e);
-    alert("Export failed — check console.");
-  } finally {
-    setKpiExporting("");
-  }
-};
+    // Same pool the vendor/set-no filters already scope the team tables to —
+    // reused here so the KPI cards react the moment a filter is picked.
+    const kpiFilteredProducts = useMemo(() => {
+      return products.filter(p => {
+        if (fVendor && (p.vendor || "").trim() !== fVendor.trim()) return false;
+        if (fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
+        return true;
+      });
+    }, [products, fVendor, fSetNo]);
 
-const productKpis = useMemo(() => {
-  const total = products.length;
-  const complete = products.filter(p => p.verdict === "Approved").length;
-  const issues = products.filter(
-    p => p.verdict === "Issues Found" || Object.values(p.stages || {}).some(s => s.status === "Issue")
-  ).length;
-  const pending = total - complete - issues;
-  return [
-    { lab: "Total Products", val: total, sub: division, ic: I.box, scope: "all" },
-    { lab: "Pending", val: pending, sub: "not yet assigned", ic: I.layers, color: pending > 0 ? "var(--peach-ink)" : "var(--sage-ink)", scope: "pending" },
-    { lab: "Complete", val: complete, sub: "fully done", ic: I.check, color: "var(--sage-ink)", scope: "completed" },
-    { lab: "Issues", val: issues, sub: `${issues} flagged stage(s)`, ic: I.alert, color: issues ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
-  ];
-}, [products, division]);
+    const productKpis = useMemo(() => {
+      const total = kpiFilteredProducts.length;
+      const complete = kpiFilteredProducts.filter(p => p.verdict === "Approved").length;
+      const issues = kpiFilteredProducts.filter(
+        p => p.verdict === "Issues Found" || Object.values(p.stages || {}).some(s => s.status === "Issue")
+      ).length;
+      const pending = total - complete - issues;
+      const scopeLabel = fVendor || fSetNo
+        ? [fVendor, fSetNo].filter(Boolean).join(" · ")
+        : division;
+      return [
+        { lab: "Total Products", val: total, sub: scopeLabel, ic: I.box, scope: "all" },
+        { lab: "Pending", val: pending, sub: "not yet assigned", ic: I.layers, color: pending > 0 ? "var(--peach-ink)" : "var(--sage-ink)", scope: "pending" },
+        { lab: "Complete", val: complete, sub: "fully done", ic: I.check, color: "var(--sage-ink)", scope: "completed" },
+        { lab: "Issues", val: issues, sub: `${issues} flagged stage(s)`, ic: I.alert, color: issues ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
+      ];
+    }, [kpiFilteredProducts, division, fVendor, fSetNo]);
 
     const backendTableRows = teamStats.backendTeam;
     const photoTableRows = teamStats.photoTeam;
