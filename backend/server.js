@@ -1369,15 +1369,15 @@ app.post("/api/bulkImportProducts", async (req, res) => {
               ? Number(r.dimensions_weight)
               : null
             : null;
-        if (
-          !statusRaw &&
-          !person &&
-          !comm &&
-          width == null &&
-          height == null &&
-          weight == null
-        )
-          continue;
+                // Always push a row for every stage, even if this Excel row left the
+        // stage's status/person/comments blank — otherwise a brand-new SKU
+        // never gets a stage_entries row at all and silently disappears from
+        // every stats query that reads stage_entries (pipelineBreakdown,
+        // memberStats, allMemberStats, etc.) instead of showing as
+        // "Not Started". A blank status here becomes null and is defaulted
+        // to 'Not Started' at INSERT time — but only on first insert; if the
+        // row already exists, the ON CONFLICT clause below still preserves
+        // its current status instead of overwriting it back to Not Started.
         pids.push(productId);
         stageKeys.push(s);
         statuses.push(normStatusServer(statusRaw));
@@ -1392,7 +1392,7 @@ app.post("/api/bulkImportProducts", async (req, res) => {
     if (pids.length > 0) {
       await client.query(
         `INSERT INTO stage_entries (product_id, stage_key, status, person, comments, updated_at, width_cm, height_cm, weight_gm)
-         SELECT p, sk, st, pe, co, now(), w, h, wt
+         SELECT p, sk, COALESCE(st, 'Not Started'::stage_status), pe, co, now(), w, h, wt
          FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::numeric[], $8::numeric[])
            AS t(p, sk, st, pe, co, w, h, wt)
          ON CONFLICT (product_id, stage_key) DO UPDATE SET
