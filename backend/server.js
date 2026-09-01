@@ -963,6 +963,21 @@ app.post("/api/appendAudit", async (req, res) => {
    GET /api/memberStats?memberId=chitra&division=KOC Cards
    Returns accurate counts straight from DB for Overview KPIs
 ---------------------------------------------------------------- */
+/* ----------------------------------------------------------------
+   GET /api/memberStats?memberId=chitra&division=Bombay Cards
+   Returns accurate counts straight from DB for Overview KPIs.
+
+   FIXED (2 bugs):
+   1. JOIN -> LEFT JOIN on stage_entries: a stage that's never been
+      touched has no row in stage_entries at all, so an INNER JOIN
+      silently dropped the whole card from card_level.
+   2. bool_or() null-safety: when every stage in a card is untouched
+      (se.status IS NULL throughout), the QC-flagged half of the OR
+      evaluated to NULL instead of false, and `false OR NULL = NULL`
+      made bool_or() return NULL for the whole card instead of false -
+      failing both the "NOT has_open_issue" and "has_open_issue"
+      checks, so the card vanished from every bucket.
+---------------------------------------------------------------- */
 app.get("/api/memberStats", async (req, res) => {
   const { memberId, division } = req.query;
   if (!memberId || !division)
@@ -1000,11 +1015,11 @@ app.get("/api/memberStats", async (req, res) => {
           COUNT(*) AS stages_owned,
           COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed,
           bool_or(
-            se.status = 'Issue'
-            OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+            COALESCE(se.status, 'Not Started') = 'Issue'
+            OR COALESCE(se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%', false)
           ) AS has_open_issue
         FROM target_assignments ta
-        JOIN stage_entries se
+        LEFT JOIN stage_entries se
           ON se.product_id = ta.product_id
           AND se.stage_key = ta.assigned_stage
         GROUP BY ta.product_id
