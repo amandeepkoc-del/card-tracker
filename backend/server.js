@@ -2894,6 +2894,67 @@ app.get("/api/dispatch/scan-log", async (req, res) => {
 });
 
 
+/* ----------------------------------------------------------------
+   GET /api/dispatch/branch-pending?division=&branchName=
+   Every batch dispatched TO this branch, with whether it's been
+   received yet and when it was dispatched — powers the Branch Upload
+   dashboard so the branch can see what's waiting on them.
+---------------------------------------------------------------- */
+/* ----------------------------------------------------------------
+   GET /api/dispatch/branch-pending?division=&branchName=
+   Every batch dispatched TO this branch, with how many SKUs are
+   still pending (dispatched but not yet scanned as received) —
+   powers the Branch Upload dashboard.
+---------------------------------------------------------------- */
+app.get("/api/dispatch/branch-pending", async (req, res) => {
+  const { division, branchName } = req.query;
+  if (!division || !branchName) {
+    return res.status(400).json({ ok: false, error: "division and branchName required" });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         d.id AS dispatch_batch_id,
+         d.vendor, d.batch_label, d.set_label, d.uploaded_at AS dispatched_at,
+         array_agg(DISTINCT di.sku) FILTER (WHERE di.sku IS NOT NULL) AS dispatched_skus,
+         r.id AS received_batch_id,
+         r.uploaded_at AS received_at,
+         array_agg(DISTINCT ri.sku) FILTER (WHERE ri.sku IS NOT NULL) AS received_skus
+       FROM dispatch_batches d
+       LEFT JOIN dispatch_batch_items di ON di.batch_id = d.id
+       LEFT JOIN dispatch_batches r
+         ON r.division = d.division AND r.vendor = d.vendor AND r.batch_label = d.batch_label
+         AND r.set_label = d.set_label AND r.branch_name = d.branch_name AND r.source = 'received'
+       LEFT JOIN dispatch_batch_items ri ON ri.batch_id = r.id
+       WHERE d.division = $1 AND d.branch_name = $2 AND d.source = 'dispatched'
+       GROUP BY d.id, r.id
+       ORDER BY d.uploaded_at DESC`,
+      [division, branchName]
+    );
+
+    const result = rows.map(r => {
+      const dispatchedSet = new Set((r.dispatched_skus || []).map(s => s.toLowerCase()));
+      const receivedSet = new Set((r.received_skus || []).map(s => s.toLowerCase()));
+      const pendingSkus = [...dispatchedSet].filter(s => !receivedSet.has(s));
+      return {
+        vendor: r.vendor,
+        batch_label: r.batch_label,
+        set_label: r.set_label,
+        dispatched_at: r.dispatched_at,
+        received_at: r.received_at,
+        dispatched_count: dispatchedSet.size,
+        received_count: receivedSet.size,
+        pending_count: pendingSkus.length,
+        fully_received: dispatchedSet.size > 0 && pendingSkus.length === 0,
+      };
+    });
+
+    res.json({ ok: true, rows: result });
+  } catch (e) {
+    console.error("branch-pending error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 
 app.listen(process.env.PORT, () => {

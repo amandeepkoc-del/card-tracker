@@ -1572,23 +1572,27 @@
     const role = auth.role || "";
     // master and admin see everything
     if (role === "master" || role === "admin") return true;
+    const stages = (auth.stages || "").split(",").map(s => s.trim());
     // qcaudit tab — master/admin always, or member with "qcaudit" in their stages
-    if (tabKey === "qcaudit") {
-      const stages = (auth.stages || "").split(",").map(s => s.trim());
-      return stages.includes("qcaudit");
-    }
+    if (tabKey === "qcaudit") return stages.includes("qcaudit");
     // assign tab — master/admin always, or member with "assign" in their stages
-    if (tabKey === "assign") {
-      const stages = (auth.stages || "").split(",").map(s => s.trim());
-      return stages.includes("assign");
-    }
+    if (tabKey === "assign") return stages.includes("assign");
     // bulk tab — only if member has "bulk" in their stages
-    if (tabKey === "bulk") {
-      const stages = (auth.stages || "").split(",").map(s => s.trim());
-      return stages.includes("bulk");
+    if (tabKey === "bulk") return stages.includes("bulk");
+    // branchupload tab — only if member has "branchupload" in their stages
+    if (tabKey === "branchupload") return stages.includes("branchupload");
+    // overview is always visible to any logged-in member
+    if (tabKey === "overview") return true;
+    // Products & Pipeline — only for members who have at least one REAL
+    // pipeline stage (barcoding, content, photography, etc.) assigned.
+    // Admin-style permissions (assign/bulk/qcaudit/branchupload) alone
+    // should NOT unlock this tab — e.g. a branch-upload-only person
+    // shouldn't see Products & Pipeline at all.
+    if (tabKey === "products") {
+      const nonPipelinePerms = ["assign", "bulk", "qcaudit", "branchupload"];
+      return stages.some(s => s && !nonPipelinePerms.includes(s));
     }
-    // members only see overview and products
-    return ["overview", "products"].includes(tabKey);
+    return false;
   }
 
   function getAllowedStages(auth) {
@@ -1766,6 +1770,30 @@
       return data.ok ? data.sets : [];
     } catch (e) { console.error("fetchSetSummary", e); return []; }
   }
+
+  async function fetchBranchPending(division, branchName) {
+    try {
+      const params = new URLSearchParams({ division, branchName });
+      const r = await fetch(`${API}/api/dispatch/branch-pending?${params}`);
+      const data = await r.json();
+      return data.ok ? data.rows : [];
+    } catch (e) { console.error("fetchBranchPending", e); return []; }
+  }
+
+
+  function timeAgo(iso) {
+    if (!iso) return "—";
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins} min${mins !== 1 ? "s" : ""} ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} hr${hrs !== 1 ? "s" : ""} ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days} day${days !== 1 ? "s" : ""} ago`;
+  }
+
+  
 
 
 
@@ -2625,7 +2653,7 @@
             {tab === "products" && <Products division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} initialFilter={productsFilter} onFilterConsumed={() => setProductsFilter(null)} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} division={division} />}
             {tab === "admindispatch" && <DispatchBatches division={division} operator={operator} vendors={vendors[division] || []} />}
-            {tab === "branchupload" && <BranchUploadTab division={division} vendors={vendors[division] || []} operator={operator} />}
+            {tab === "branchupload" && <BranchUploadTab division={division} vendors={vendors[division] || []} operator={operator} assignments={assignments} auth={auth} teamMembers={teamMembers} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
             {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
@@ -6237,78 +6265,165 @@
     XLSX.writeFile(wb, mode === "admin" ? "dispatch_admin_reference_template.xlsx" : "dispatch_branch_received_template.xlsx");
   }
 
-  function BranchReceiving({ division, vendors, myBranch, operator }) {
-    const [vendor, setVendor] = useState("");
-    const [batchLabelOptions, setBatchLabelOptions] = useState([]);
-    const [batchLabel, setBatchLabel] = useState("");
-    const [setLabelOptions, setSetLabelOptions] = useState([]);
-    const [setLabel, setSetLabel] = useState("");
+  function BranchReceiving({ division, myBranch, operator }) {
+      const [pending, setPending] = useState([]);
+      const [loadingPending, setLoadingPending] = useState(true);
 
-    // Only vendors that have actually dispatched something to this branch
-    useEffect(() => {
-      setBatchLabel(""); setBatchLabelOptions([]); setSetLabel(""); setSetLabelOptions([]);
-      if (!vendor) return;
-      fetchBatchLabels(division, vendor).then(setBatchLabelOptions);
-    }, [division, vendor]);
+      const loadPending = useCallback(async () => {
+        setLoadingPending(true);
+        const rows = await fetchBranchPending(division, myBranch);
+        setPending(rows);
+        setLoadingPending(false);
+      }, [division, myBranch]);
+      useEffect(() => { loadPending(); }, [loadPending]);
 
-    // Only sets that were dispatched to THIS branch specifically
-    useEffect(() => {
-      setSetLabel(""); setSetLabelOptions([]);
-      if (!vendor || !batchLabel) return;
-      fetchSetLabels(division, vendor, batchLabel, myBranch).then(setSetLabelOptions);
-    }, [division, vendor, batchLabel, myBranch]);
+      // Only vendors that have actually dispatched something to THIS branch
+      const branchVendors = useMemo(() =>
+        [...new Set(pending.map(r => r.vendor))].sort(),
+        [pending]);
 
-    return (
-      <div>
-        <div className="note">Scan every card as it arrives at <b>{myBranch}</b>. Only sets that were actually dispatched to your branch show up below. Duplicate scans are flagged instantly.</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, margin: "14px 0" }}>
-          <label className="fld">Vendor
-            <select value={vendor} onChange={e => setVendor(e.target.value)}>
-              <option value="">— select vendor —</option>
-              {vendors.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </label>
-          <label className="fld">Batch label
-            <select value={batchLabel} onChange={e => setBatchLabel(e.target.value)} disabled={!vendor}>
-              <option value="">— select batch —</option>
-              {batchLabelOptions.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
-          </label>
-          <label className="fld">Set
-            <select value={setLabel} onChange={e => setSetLabel(e.target.value)} disabled={!batchLabel}>
-              <option value="">— select set —</option>
-              {setLabelOptions.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            {batchLabel && setLabelOptions.length === 0 && (
-              <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>No sets dispatched to your branch for this batch yet.</div>
+      const [vendor, setVendor] = useState("");
+      const [batchLabelOptions, setBatchLabelOptions] = useState([]);
+      const [batchLabel, setBatchLabel] = useState("");
+      const [setLabelOptions, setSetLabelOptions] = useState([]);
+      const [setLabel, setSetLabel] = useState("");
+
+      useEffect(() => {
+        setVendor(""); setBatchLabel(""); setBatchLabelOptions([]); setSetLabel(""); setSetLabelOptions([]);
+      }, [myBranch]);
+
+      // Batch labels scoped to this branch + vendor (from the pending rows, not
+      // the global endpoint — guarantees we only ever show batches sent here)
+      useEffect(() => {
+        setBatchLabel(""); setSetLabel(""); setSetLabelOptions([]);
+        if (!vendor) { setBatchLabelOptions([]); return; }
+        const labels = [...new Set(pending.filter(r => r.vendor === vendor).map(r => r.batch_label))];
+        setBatchLabelOptions(labels);
+      }, [vendor, pending]);
+
+      useEffect(() => {
+        setSetLabel("");
+        if (!vendor || !batchLabel) { setSetLabelOptions([]); return; }
+        const labels = [...new Set(pending.filter(r => r.vendor === vendor && r.batch_label === batchLabel).map(r => r.set_label))];
+        setSetLabelOptions(labels);
+      }, [vendor, batchLabel, pending]);
+
+      const pendingOnly = pending.filter(r => !r.fully_received);
+
+      return (
+        <div>
+          <div className="note">Scan every card as it arrives at <b>{myBranch}</b>. Only sets that were actually dispatched to your branch show up below. Duplicate scans are flagged instantly.</div>
+
+          {/* Pending dispatches panel */}
+          <div className="sec">
+            <div className="sec-h">
+              <h3>Waiting on your branch</h3>
+          <span className="hint">
+            {loadingPending
+              ? "loading…"
+              : `${pendingOnly.length} batch(es) · ${pendingOnly.reduce((sum, r) => sum + r.pending_count, 0)} SKU(s) pending`}
+          </span>
+            </div>
+            {!loadingPending && pendingOnly.length === 0 ? (
+              <div className="card empty">Nothing pending — you're all caught up.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                            {pendingOnly.map((r, i) => {
+                              const startedScanning = r.received_count > 0;
+                              return (
+                                <div key={i} className="card pad" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                                  {startedScanning
+                                    ? <span className="chip c-prog"><span className="dot" />In progress</span>
+                                    : <span className="chip c-app"><span className="dot" />Awaiting receipt</span>}
+                                  <b>{r.vendor}</b>
+                                  <span className="tag">· Batch: {r.batch_label} · Set: {r.set_label}</span>
+                                  <span style={{
+                                    fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: "2px 10px",
+                                    background: "var(--rose-bg)", color: "var(--rose-ink)", border: "1px solid var(--rose)"
+                                  }}>
+                                    {r.pending_count} SKU{r.pending_count !== 1 ? "s" : ""} pending
+                                  </span>
+                                  {startedScanning && (
+                                    <span className="tag">· {r.received_count}/{r.dispatched_count} scanned</span>
+                                  )}
+                                  <div className="spacer" />
+                                  <span className="tag" style={{ fontWeight: 600 }}>Dispatched {timeAgo(r.dispatched_at)}</span>
+                                  <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }}
+                                    onClick={() => { setVendor(r.vendor); setBatchLabel(r.batch_label); setSetLabel(r.set_label); }}>
+                                    Scan this →
+                                  </button>
+                                </div>
+                              );
+                            })}
+              </div>
             )}
-          </label>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, margin: "14px 0" }}>
+            <label className="fld">Vendor
+              <select value={vendor} onChange={e => setVendor(e.target.value)}>
+                <option value="">— select vendor —</option>
+                {branchVendors.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              {branchVendors.length === 0 && !loadingPending && (
+                <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>No vendor has dispatched anything to your branch yet.</div>
+              )}
+            </label>
+            <label className="fld">Batch label
+              <select value={batchLabel} onChange={e => setBatchLabel(e.target.value)} disabled={!vendor}>
+                <option value="">— select batch —</option>
+                {batchLabelOptions.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </label>
+            <label className="fld">Set
+              <select value={setLabel} onChange={e => setSetLabel(e.target.value)} disabled={!batchLabel}>
+                <option value="">— select set —</option>
+                {setLabelOptions.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+          </div>
+          {vendor && batchLabel && setLabel && (
+            <DispatchScanPanel division={division} vendor={vendor} batchLabel={batchLabel} setLabel={setLabel} branchName={myBranch} source="received" scannedBy={operator}
+              onScanned={loadPending} />
+          )}
         </div>
-        {vendor && batchLabel && setLabel && (
-          <DispatchScanPanel division={division} vendor={vendor} batchLabel={batchLabel} setLabel={setLabel} branchName={myBranch} source="received" scannedBy={operator} />
-        )}
-      </div>
-    );
-  }
+      );
+    }
 
 
     /* ---------------- DISPATCH BATCHES (admin/branch comparison) ---------------- */
 
 
-  function BranchUploadTab({ division, vendors, operator }) {
-    const [myBranch, setMyBranch] = useState(STORES[0]);
-    return (
-      <div>
-        <label className="fld" style={{ maxWidth: 280, marginBottom: 16 }}>
-          Your branch
-          <select value={myBranch} onChange={e => setMyBranch(e.target.value)}>
-            {STORES.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
-        <BranchReceiving division={division} vendors={vendors} myBranch={myBranch} operator={operator} />
-      </div>
-    );
-  }
+function BranchUploadTab({ division, vendors, operator, assignments, auth, teamMembers }) {
+  const isMasterOrAdmin = auth.role === "master" || auth.role === "admin";
+  const myMemberId = useMemo(() => {
+    const me = teamMembers.find(m => m.email && auth.email && m.email.trim().toLowerCase() === auth.email.trim().toLowerCase());
+    return me?.id || null;
+  }, [teamMembers, auth.email]);
+
+  const myAssignedBranches = useMemo(() => {
+    if (isMasterOrAdmin) return STORES;
+    const mine = assignments
+      .filter(a => a.division === division && a.stage === "branchupload" && a.memberId === myMemberId)
+      .map(a => a.sku);
+    return mine.length > 0 ? mine : STORES; // no assignment yet → unrestricted fallback
+  }, [assignments, division, isMasterOrAdmin, myMemberId]);
+
+  const [myBranch, setMyBranch] = useState(myAssignedBranches[0]);
+  useEffect(() => { if (!myAssignedBranches.includes(myBranch)) setMyBranch(myAssignedBranches[0]); }, [myAssignedBranches]);
+
+  return (
+    <div>
+      <label className="fld" style={{ maxWidth: 280, marginBottom: 16 }}>
+        Your branch
+        <select value={myBranch} onChange={e => setMyBranch(e.target.value)}>
+          {myAssignedBranches.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+      <BranchReceiving division={division} vendors={vendors} myBranch={myBranch} operator={operator} />
+    </div>
+  );
+}
   function DispatchBatches({ division, operator, vendors }) {
     const [mode, setMode] = useState("admin"); // "admin" | "compare"
     const [uploadMode, setUploadMode] = useState("bulk"); // "bulk" | "scan"
@@ -6725,8 +6840,8 @@
   }
 
 
-  function DispatchScanPanel({ division, vendor, batchLabel, setLabel, branchName, source, scannedBy }) {
-    const [items, setItems] = useState([]); // [{sku, scanCount}]
+  function DispatchScanPanel({ division, vendor, batchLabel, setLabel, branchName, source, scannedBy, onScanned }) {
+    const [items, setItems] = useState([]); 
     const [flashDupe, setFlashDupe] = useState(null);
     const [batchId, setBatchId] = useState(null);
 
@@ -7270,6 +7385,52 @@
     const [editStages, setEditStages] = useState([]);
     const [editErr, setEditErr] = useState("");
     const [selMember, setSelMember] = useState("");
+
+    const [selBranchMember, setSelBranchMember] = useState("");
+    const [selBranches, setSelBranches] = useState([]);
+    const [branchErr, setBranchErr] = useState("");
+    const [branchMsg, setBranchMsg] = useState("");
+
+    const branchAssignments = assignments.filter(a => a.division === division && a.stage === "branchupload");
+
+    const assignBranches = async () => {
+      if (!selBranchMember || selBranches.length === 0) {
+        setBranchErr("Select a team member and at least one branch.");
+        return;
+      }
+      const member = divMembers.find(m => m.id === selBranchMember);
+      if (!member) { setBranchErr("Member not found."); return; }
+
+      let updated = [...assignments];
+      selBranches.forEach(branch => {
+        updated = updated.filter(a =>
+          !(a.division === division && a.memberId === selBranchMember && a.stage === "branchupload" && a.sku.trim().toLowerCase() === branch.trim().toLowerCase())
+        );
+        updated.push({
+          id: uid(),
+          memberId: selBranchMember,
+          managerId: isMasterOrAdmin ? "master" : myMemberId,
+          sku: branch,
+          stage: "branchupload",
+          division,
+          assignedAt: now()
+        });
+      });
+
+      setBranchErr(""); setBranchMsg("");
+      const result = await onSaveAssignments(updated);
+      if (!result || result.ok === false) {
+        setBranchErr(`Could not save${result?.error ? ": " + result.error : ""}.`);
+        return;
+      }
+      setSelBranches([]);
+      setBranchMsg(`✓ Assigned ${selBranches.length} branch(es) to ${member.name}.`);
+    };
+
+    const unassignBranch = (id, branch, memberName) => {
+      onSaveAssignments(assignments.filter(a => a.id !== id));
+      setBranchMsg(`✓ Removed ${branch} from ${memberName}.`);
+    };
     // const [selStage, setSelStage] = useState("");
     const [selVendor, setSelVendor] = useState("");
     const [selSetNo, setSelSetNo] = useState("");
@@ -7633,13 +7794,13 @@
     const [selectedStages, setSelectedStages] = useState([]);
     const allStages = STAGES.filter(s => s.k !== "finalqc" && s.k !== "scan");
     const allPermissions = isMasterOrAdmin
-      ? [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }, { k: "qcaudit", n: "QC Audit" }]
-      : allStages.filter(s => (auth.stages || "").split(",").map(x => x.trim()).includes(s.k));
-    // const assignableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
+        ? [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }, { k: "qcaudit", n: "QC Audit" }, { k: "branchupload", n: "Branch Upload" }]
+        : allStages.filter(s => (auth.stages || "").split(",").map(x => x.trim()).includes(s.k));
+          // const assignableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-          {(canManageMembers ? [["members", "Team Members"], ["assignments", "SKU Assignments"]] : [["assignments", "SKU Assignments"]]).map(([k, n]) => (
+          {(canManageMembers ? [["members", "Team Members"], ["assignments", "SKU Assignments"], ["branches", "Branch Upload"]] : [["assignments", "SKU Assignments"]]).map(([k, n]) => (
             <button key={k} onClick={() => setSubTab(k)} style={{ padding: "8px 18px", borderRadius: 10, border: "1px solid var(--line2)", background: subTab === k ? "var(--ink)" : "var(--card)", color: subTab === k ? "#fff" : "var(--ink)", fontWeight: 600, fontSize: 13 }}>{n}</button>
           ))}
         </div>
@@ -7800,6 +7961,72 @@
                 </table>
               </div>
             }
+          </div>
+        )}
+
+        {subTab === "branches" && canManageMembers && (
+          <div>
+            <div className="card pad" style={{ marginBottom: 16 }}>
+              <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Assign branches for Branch Upload</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 12 }}>
+                <label className="fld">Team member
+                  <select value={selBranchMember} onChange={e => { setSelBranchMember(e.target.value); setSelBranches([]); setBranchErr(""); }}>
+                    <option value="">— select member —</option>
+                    {divMembers.filter(m => (m.stages || "").split(",").map(s => s.trim()).includes("branchupload")).map(m =>
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    )}
+                  </select>
+                </label>
+                <label className="fld">Branches
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                    {STORES.map(st => {
+                      const alreadyAssigned = branchAssignments.some(a => a.memberId === selBranchMember && a.sku === st);
+                      return (
+                        <label key={st} style={{
+                          display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500,
+                          background: selBranches.includes(st) || alreadyAssigned ? "var(--sky-bg)" : "var(--card)",
+                          border: `1px solid ${selBranches.includes(st) || alreadyAssigned ? "var(--sky)" : "var(--line2)"}`,
+                          borderRadius: 8, padding: "5px 10px", cursor: alreadyAssigned ? "default" : "pointer"
+                        }}>
+                          <input type="checkbox" disabled={alreadyAssigned} checked={selBranches.includes(st) || alreadyAssigned}
+                            onChange={e => setSelBranches(prev => e.target.checked ? [...prev, st] : prev.filter(b => b !== st))} />
+                          {st}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </label>
+              </div>
+              {branchErr && <div style={{ color: "var(--rose-ink)", fontSize: 12, marginBottom: 10 }}>{branchErr}</div>}
+              {branchMsg && <div style={{ color: "var(--sage-ink)", fontSize: 12, marginBottom: 10, fontWeight: 600 }}>{branchMsg}</div>}
+              <button className="primary" onClick={assignBranches}>Assign branch(es)</button>
+            </div>
+
+            <div className="tbl-wrap">
+              <table>
+                <thead><tr><th>Member</th><th>Branches assigned</th></tr></thead>
+                <tbody>
+                  {divMembers.filter(m => (m.stages || "").split(",").map(s => s.trim()).includes("branchupload")).map(m => {
+                    const rows = branchAssignments.filter(a => a.memberId === m.id);
+                    return (
+                      <tr key={m.id}>
+                        <td><b>{m.name}</b></td>
+                        <td>
+                          {rows.length === 0 ? <span className="tag">No branches assigned</span> :
+                            rows.map(r => (
+                              <span key={r.id} className="chip c-done" style={{ marginRight: 6, marginBottom: 4 }}>
+                                <span className="dot" />{r.sku}
+                                <button className="danger" style={{ fontSize: 9, padding: "0 5px", marginLeft: 6 }}
+                                  onClick={() => unassignBranch(r.id, r.sku, m.name)}>✕</button>
+                              </span>
+                            ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
