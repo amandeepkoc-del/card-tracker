@@ -2313,80 +2313,50 @@ app.get("/api/store-list", async (req, res) => {
    body: { division, vendor, batchLabel, uploadedBy, filename, skus: [{sku, qty}] }
 ---------------------------------------------------------------- */
 app.post("/api/dispatch/admin-upload", async (req, res) => {
-  const { division, vendor, batchLabel, uploadedBy, filename, skus } = req.body;
-  if (
-    !division ||
-    !vendor ||
-    !batchLabel ||
-    !Array.isArray(skus) ||
-    skus.length === 0
-  ) {
-    return res.status(400).json({
-      ok: false,
-      error: "division, vendor, batchLabel and skus[] required",
-    });
+  const { division, vendor, batchLabel, setLabel, branchName, uploadedBy, filename, skus } = req.body;
+  if (!division || !vendor || !batchLabel || !setLabel || !branchName || !Array.isArray(skus) || skus.length === 0) {
+    return res.status(400).json({ ok: false, error: "division, vendor, batchLabel, setLabel, branchName and skus[] required" });
   }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const { rows: vcheck } = await client.query("SELECT 1 FROM vendors WHERE division=$1 AND vendor_name=$2", [division, vendor]);
+    if (!vcheck.length) { await client.query("ROLLBACK"); return res.status(400).json({ ok: false, error: `Vendor "${vendor}" not found.` }); }
+    const { rows: scheck } = await client.query("SELECT 1 FROM store_list WHERE store_name=$1", [branchName]);
+    if (!scheck.length) { await client.query("ROLLBACK"); return res.status(400).json({ ok: false, error: `Unknown branch "${branchName}".` }); }
 
-    const { rows: vcheck } = await client.query(
-      "SELECT 1 FROM vendors WHERE division = $1 AND vendor_name = $2",
-      [division, vendor],
-    );
-    if (vcheck.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({
-        ok: false,
-        error: `Vendor "${vendor}" not found for ${division} — add it under Products first.`,
-      });
-    }
-
-    const { rows } = await client.query(
-      `INSERT INTO dispatch_batches (division, vendor, batch_label, set_number, branch_name, uploaded_by, source_filename)
-       VALUES ($1,$2,$3,1,NULL,$4,$5)
-       ON CONFLICT (division, vendor, batch_label, set_number)
-       DO UPDATE SET uploaded_by = $4, source_filename = $5, updated_at = now()
+    const { rows: batchRows } = await client.query(
+      `INSERT INTO dispatch_batches (division, vendor, batch_label, set_label, branch_name, source, uploaded_by, source_filename)
+       VALUES ($1,$2,$3,$4,$5,'dispatched',$6,$7)
+       ON CONFLICT (division, vendor, batch_label, set_label, branch_name, source)
+       DO UPDATE SET uploaded_by=$6, source_filename=$7, updated_at=now()
        RETURNING id`,
-      [
-        division,
-        vendor,
-        batchLabel,
-        uploadedBy || "Unattributed",
-        filename || null,
-      ],
+      [division, vendor, batchLabel, setLabel, branchName, uploadedBy || "Unattributed", filename || null]
     );
-    const batchId = rows[0].id;
+    const batchId = batchRows[0].id;
 
-    await client.query("DELETE FROM dispatch_batch_items WHERE batch_id = $1", [
-      batchId,
-    ]);
-    const cleanSkus = [
-      ...new Set(skus.map((s) => String(s.sku || s).trim()).filter(Boolean)),
-    ];
-    const qtyMap = {};
-    skus.forEach((s) => {
-      const k = String(s.sku || s).trim();
-      if (k) qtyMap[k] = Number(s.qty) || 1;
-    });
-    if (cleanSkus.length > 0) {
+    const counts = {};
+    skus.forEach(s => { const k = String(s.sku || s).trim(); if (k) counts[k] = (counts[k] || 0) + (Number(s.qty) || 1); });
+    const skuList = Object.keys(counts), qtyList = skuList.map(s => counts[s]);
+
+    if (skuList.length > 0) {
       await client.query(
-        `INSERT INTO dispatch_batch_items (batch_id, sku, qty)
-         SELECT $1, s, q FROM unnest($2::text[], $3::int[]) AS t(s, q)`,
-        [batchId, cleanSkus, cleanSkus.map((s) => qtyMap[s] || 1)],
+        `INSERT INTO dispatch_batch_items (batch_id, sku, qty, scan_count, first_scanned_at, last_scanned_at)
+         SELECT $1, s, q, q, now(), now() FROM unnest($2::text[], $3::int[]) AS t(s,q)
+         ON CONFLICT (batch_id, sku) DO UPDATE SET
+           scan_count = dispatch_batch_items.scan_count + EXCLUDED.scan_count,
+           last_scanned_at = now()`,
+        [batchId, skuList, qtyList]
       );
     }
     await client.query("COMMIT");
-    res.json({ ok: true, batchId, setNumber: 1, skuCount: cleanSkus.length });
+    res.json({ ok: true, batchId, skuCount: skuList.length });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("admin-upload error", e);
     res.status(500).json({ ok: false, error: e.message });
-  } finally {
-    client.release();
-  }
+  } finally { client.release(); }
 });
-
 /* ----------------------------------------------------------------
    POST /api/dispatch/branch-upload — branch's received set (auto set_number)
    body: { division, vendor, batchLabel, branchName, uploadedBy, filename, skus: [{sku, qty}] }
@@ -2510,58 +2480,47 @@ app.post("/api/dispatch/branch-upload", async (req, res) => {
    GET /api/dispatch/comparison?division=&vendor=&batchLabel=
 ---------------------------------------------------------------- */
 app.get("/api/dispatch/comparison", async (req, res) => {
-  const { division, vendor, batchLabel } = req.query;
-  if (!division || !vendor || !batchLabel)
-    return res
-      .status(400)
-      .json({ ok: false, error: "division, vendor, batchLabel required" });
+  const { division, vendor, batchLabel, setLabel, branchName } = req.query;
+  if (!division || !vendor || !batchLabel) return res.status(400).json({ ok: false, error: "division, vendor, batchLabel required" });
   try {
-    const { rows: batches } = await pool.query(
-      `SELECT b.id, b.set_number, b.branch_name, b.uploaded_by, b.uploaded_at,
+    const { rows } = await pool.query(
+      `SELECT b.branch_name, b.source, b.uploaded_by, b.uploaded_at,
               array_agg(DISTINCT i.sku) FILTER (WHERE i.sku IS NOT NULL) AS skus
        FROM dispatch_batches b
        LEFT JOIN dispatch_batch_items i ON i.batch_id = b.id
        WHERE b.division=$1 AND b.vendor=$2 AND b.batch_label=$3
-       GROUP BY b.id
-       ORDER BY b.set_number ASC`,
-      [division, vendor, batchLabel],
+         AND ($4::text IS NULL OR b.set_label = $4)
+         AND ($5::text IS NULL OR b.branch_name = $5)
+       GROUP BY b.branch_name, b.source, b.uploaded_by, b.uploaded_at`,
+      [division, vendor, batchLabel, setLabel || null, branchName || null]
     );
-    const ref = batches.find((b) => b.set_number === 1);
-    if (!ref) return res.json({ ok: true, reference: null, branches: [] });
-    const refSkus = new Set((ref.skus || []).map((s) => s.toLowerCase()));
 
-    const branchResults = batches
-      .filter((b) => b.set_number !== 1)
-      .map((b) => {
-        const branchSkus = new Set((b.skus || []).map((s) => s.toLowerCase()));
-        const missing = [...refSkus].filter((s) => !branchSkus.has(s));
-        const extra = [...branchSkus].filter((s) => !refSkus.has(s));
-        return {
-          setNumber: b.set_number,
-          branchName: b.branch_name,
-          uploadedBy: b.uploaded_by,
-          uploadedAt: b.uploaded_at,
-          totalReceived: branchSkus.size,
-          totalExpected: refSkus.size,
-          matched: refSkus.size - missing.length,
-          missingSkus: missing,
-          extraSkus: extra,
-          allMatching: missing.length === 0 && extra.length === 0,
-        };
-      });
+    const byBranch = {};
+    rows.forEach(r => { (byBranch[r.branch_name] ||= {})[r.source] = r; });
 
-    res.json({
-      ok: true,
-      reference: {
-        setNumber: 1,
-        uploadedBy: ref.uploaded_by,
-        uploadedAt: ref.uploaded_at,
-        total: refSkus.size,
-      },
-      branches: branchResults,
+    const results = Object.entries(byBranch).map(([branch, sides]) => {
+      const dispatched = new Set((sides.dispatched?.skus || []).map(s => s.toLowerCase()));
+      const received = new Set((sides.received?.skus || []).map(s => s.toLowerCase()));
+      const missing = [...dispatched].filter(s => !received.has(s));
+      const extra = [...received].filter(s => !dispatched.has(s));
+      return {
+        branchName: branch,
+        dispatchedCount: dispatched.size,
+        receivedCount: received.size,
+        matched: dispatched.size - missing.length,
+        missingSkus: missing,
+        extraSkus: extra,
+        allMatching: !!sides.dispatched && !!sides.received && missing.length === 0 && extra.length === 0,
+        hasDispatch: !!sides.dispatched,
+        hasReceipt: !!sides.received,
+        dispatchedAt: sides.dispatched?.uploaded_at || null,
+        receivedAt: sides.received?.uploaded_at || null,
+      };
     });
+
+    res.json({ ok: true, branches: results });
   } catch (e) {
-    console.error("dispatch comparison error", e);
+    console.error("comparison error", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
@@ -2571,15 +2530,15 @@ app.get("/api/dispatch/comparison", async (req, res) => {
 ---------------------------------------------------------------- */
 app.get("/api/dispatch/groups", async (req, res) => {
   const { division } = req.query;
-  if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
   try {
     const { rows } = await pool.query(
-      `SELECT vendor, batch_label, COUNT(*) FILTER (WHERE set_number = 1) > 0 AS has_reference,
-              COUNT(*) FILTER (WHERE set_number != 1) AS branch_count
+      `SELECT vendor, batch_label,
+              COUNT(DISTINCT branch_name) FILTER (WHERE source = 'dispatched') AS dispatched_branches,
+              COUNT(DISTINCT branch_name) FILTER (WHERE source = 'received') AS received_branches
        FROM dispatch_batches WHERE division = $1
        GROUP BY vendor, batch_label ORDER BY vendor, batch_label DESC`,
-      [division],
+      [division]
     );
     res.json({ ok: true, groups: rows });
   } catch (e) {
@@ -2587,6 +2546,100 @@ app.get("/api/dispatch/groups", async (req, res) => {
   }
 });
 
+
+
+/* ----------------------------------------------------------------
+   GET /api/dispatch/batch-labels?division=&vendor=
+   Distinct batch labels already used for this vendor — dropdown source.
+---------------------------------------------------------------- */
+app.get("/api/dispatch/batch-labels", async (req, res) => {
+  const { division, vendor } = req.query;
+  if (!division || !vendor) return res.status(400).json({ ok: false, error: "division and vendor required" });
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT batch_label FROM dispatch_batches WHERE division=$1 AND vendor=$2 ORDER BY batch_label DESC`,
+      [division, vendor]
+    );
+    res.json({ ok: true, batchLabels: rows.map(r => r.batch_label) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+/* ----------------------------------------------------------------
+   GET /api/dispatch/set-labels?division=&vendor=&batchLabel=&branchName=
+   Distinct set labels that have a 'dispatched' row for this batch —
+   used so a branch scanning "received" only ever sees sets that were
+   actually sent to them, never sets that don't exist yet.
+   branchName is optional: omit for the admin panel (all sets in the
+   batch), pass it for a branch's own scan screen (only sets sent to them).
+---------------------------------------------------------------- */
+app.get("/api/dispatch/set-labels", async (req, res) => {
+  const { division, vendor, batchLabel, branchName } = req.query;
+  if (!division || !vendor || !batchLabel) {
+    return res.status(400).json({ ok: false, error: "division, vendor, batchLabel required" });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT set_label FROM dispatch_batches
+       WHERE division=$1 AND vendor=$2 AND batch_label=$3 AND source='dispatched'
+         AND ($4::text IS NULL OR branch_name = $4)
+       ORDER BY set_label ASC`,
+      [division, vendor, batchLabel, branchName || null]
+    );
+    res.json({ ok: true, setLabels: rows.map(r => r.set_label) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/dispatch/set-summary?division=&vendor=&batchLabel=
+   Set-by-set view: which branches a set was dispatched to, and
+   whether each has confirmed receipt yet. Used for the admin panel's
+   "dispatched to" breakdown.
+---------------------------------------------------------------- */
+app.get("/api/dispatch/set-summary", async (req, res) => {
+  const { division, vendor, batchLabel } = req.query;
+  if (!division || !vendor || !batchLabel) {
+    return res.status(400).json({ ok: false, error: "division, vendor, batchLabel required" });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT set_label, branch_name, source, uploaded_at,
+              (SELECT COUNT(*) FROM dispatch_batch_items i WHERE i.batch_id = b.id) AS sku_count
+       FROM dispatch_batches b
+       WHERE division=$1 AND vendor=$2 AND batch_label=$3
+       ORDER BY set_label, branch_name, source`,
+      [division, vendor, batchLabel]
+    );
+
+    const bySet = {};
+    rows.forEach(r => {
+      const set = (bySet[r.set_label] ||= {});
+      const branch = (set[r.branch_name] ||= {});
+      branch[r.source] = { uploadedAt: r.uploaded_at, skuCount: Number(r.sku_count) };
+    });
+
+    const sets = Object.entries(bySet).map(([setLabel, branches]) => ({
+      setLabel,
+      branches: Object.entries(branches).map(([branchName, sides]) => ({
+        branchName,
+        dispatchedAt: sides.dispatched?.uploadedAt || null,
+        dispatchedCount: sides.dispatched?.skuCount || 0,
+        receivedAt: sides.received?.uploadedAt || null,
+        receivedCount: sides.received?.skuCount || 0,
+        status: !sides.dispatched ? "not_dispatched" : !sides.received ? "awaiting_receipt" : "received",
+      })),
+    }));
+
+    res.json({ ok: true, sets });
+  } catch (e) {
+    console.error("set-summary error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 /* ----------------------------------------------------------------
    DELETE /api/dispatch/batch   body: { batchId }
    Removes one batch (admin reference OR a specific branch upload)
@@ -2627,19 +2680,18 @@ app.post("/api/dispatch/delete-batch", async (req, res) => {
 app.get("/api/dispatch/batches", async (req, res) => {
   const { division, vendor, batchLabel } = req.query;
   if (!division || !vendor || !batchLabel)
-    return res
-      .status(400)
-      .json({ ok: false, error: "division, vendor, batchLabel required" });
+    return res.status(400).json({ ok: false, error: "division, vendor, batchLabel required" });
   try {
     const { rows } = await pool.query(
-      `SELECT b.id, b.set_number, b.branch_name, b.uploaded_by, b.uploaded_at,
-              COUNT(i.sku) AS sku_count
+      `SELECT b.id, b.branch_name, b.source, b.uploaded_by, b.uploaded_at,
+              COUNT(i.sku) AS sku_count,
+              COALESCE(SUM(i.scan_count), 0) AS total_scans
        FROM dispatch_batches b
        LEFT JOIN dispatch_batch_items i ON i.batch_id = b.id
        WHERE b.division=$1 AND b.vendor=$2 AND b.batch_label=$3
        GROUP BY b.id
-       ORDER BY b.set_number ASC`,
-      [division, vendor, batchLabel],
+       ORDER BY b.branch_name ASC, b.source ASC`,
+      [division, vendor, batchLabel]
     );
     res.json({ ok: true, batches: rows });
   } catch (e) {
@@ -2690,6 +2742,159 @@ app.post("/api/dispatch/rename-batch", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+
+app.post("/api/dispatch/scan-undo", async (req, res) => {
+  const { batchId, sku } = req.body;
+  if (!batchId || !sku) return res.status(400).json({ ok: false, error: "batchId and sku required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE dispatch_batch_items SET scan_count = scan_count - 1, last_scanned_at = now()
+       WHERE batch_id=$1 AND sku=$2 AND scan_count > 0
+       RETURNING scan_count`,
+      [batchId, sku]
+    );
+    if (!rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ ok: false, error: "Item not found" });
+    }
+    let scanCount = rows[0].scan_count;
+    let removed = false;
+    if (scanCount <= 0) {
+      await client.query(`DELETE FROM dispatch_batch_items WHERE batch_id=$1 AND sku=$2`, [batchId, sku]);
+      removed = true;
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true, scanCount, removed });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("scan-undo error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally { client.release(); }
+});
+
+
+
+
+app.post("/api/dispatch/scan", async (req, res) => {
+  const { division, vendor, batchLabel, setLabel, branchName, source, sku, scannedBy } = req.body;
+  if (!division || !vendor || !batchLabel || !setLabel || !branchName || !source || !sku) {
+    return res.status(400).json({ ok: false, error: "division, vendor, batchLabel, setLabel, branchName, source, sku required" });
+  }
+  if (!["dispatched", "received"].includes(source)) {
+    return res.status(400).json({ ok: false, error: "source must be 'dispatched' or 'received'" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows: vcheck } = await client.query("SELECT 1 FROM vendors WHERE division=$1 AND vendor_name=$2", [division, vendor]);
+    if (!vcheck.length) { await client.query("ROLLBACK"); return res.status(400).json({ ok: false, error: `Vendor "${vendor}" not found.` }); }
+    const { rows: scheck } = await client.query("SELECT 1 FROM store_list WHERE store_name=$1", [branchName]);
+    if (!scheck.length) { await client.query("ROLLBACK"); return res.status(400).json({ ok: false, error: `Unknown branch "${branchName}".` }); }
+
+    // Branch scanning "received" against a set that was never dispatched to
+    // them is almost certainly a mistake — block it early with a clear error.
+    if (source === "received") {
+      const { rows: dcheck } = await client.query(
+        `SELECT id FROM dispatch_batches
+         WHERE division=$1 AND vendor=$2 AND batch_label=$3 AND set_label=$4 AND branch_name=$5 AND source='dispatched'`,
+        [division, vendor, batchLabel, setLabel, branchName]
+      );
+      if (!dcheck.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ ok: false, error: `${setLabel} was never dispatched to ${branchName} for this batch.` });
+      }
+
+      // NEW: the scanned SKU must actually be part of what was dispatched
+      // for this set/branch — not just "something" was dispatched.
+      const dispatchedBatchId = dcheck[0].id;
+      const { rows: skuCheck } = await client.query(
+        `SELECT 1 FROM dispatch_batch_items WHERE batch_id=$1 AND sku ILIKE $2`,
+        [dispatchedBatchId, String(sku).trim()]
+      );
+      if (!skuCheck.length) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          ok: false,
+          error: `SKU "${sku}" was not part of the dispatched list for ${setLabel} → ${branchName}.`,
+        });
+      }
+    }
+
+    let { rows: batchRows } = await client.query(
+      `SELECT id FROM dispatch_batches WHERE division=$1 AND vendor=$2 AND batch_label=$3 AND set_label=$4 AND branch_name=$5 AND source=$6`,
+      [division, vendor, batchLabel, setLabel, branchName, source]
+    );
+    let batchId;
+    if (batchRows.length === 0) {
+      const ins = await client.query(
+        `INSERT INTO dispatch_batches (division, vendor, batch_label, set_label, branch_name, source, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [division, vendor, batchLabel, setLabel, branchName, source, scannedBy || "Unattributed"]
+      );
+      batchId = ins.rows[0].id;
+    } else {
+      batchId = batchRows[0].id;
+      await client.query(`UPDATE dispatch_batches SET updated_at=now(), uploaded_by=$2 WHERE id=$1`, [batchId, scannedBy || "Unattributed"]);
+    }
+
+    const cleanSku = String(sku).trim();
+    const { rows: upsert } = await client.query(
+      `INSERT INTO dispatch_batch_items (batch_id, sku, qty, scan_count, first_scanned_at, last_scanned_at)
+       VALUES ($1,$2,1,1,now(),now())
+       ON CONFLICT (batch_id, sku) DO UPDATE SET
+         scan_count = dispatch_batch_items.scan_count + 1,
+         last_scanned_at = now()
+       RETURNING scan_count`,
+      [batchId, cleanSku]
+    );
+    const scanCount = upsert[0].scan_count;
+
+    const { rows: totals } = await client.query(
+      `SELECT COUNT(*) AS unique_skus, COALESCE(SUM(scan_count),0) AS total_scans FROM dispatch_batch_items WHERE batch_id=$1`,
+      [batchId]
+    );
+
+    await client.query("COMMIT");
+    res.json({
+      ok: true, batchId, sku: cleanSku,
+      scanCount, isDuplicate: scanCount > 1,
+      uniqueSkus: Number(totals[0].unique_skus),
+      totalScans: Number(totals[0].total_scans),
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("dispatch/scan error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally { client.release(); }
+});
+
+
+app.get("/api/dispatch/scan-log", async (req, res) => {
+  const { division, vendor, batchLabel, setLabel, branchName, source } = req.query;
+  if (!division || !vendor || !batchLabel || !setLabel || !branchName || !source) {
+    return res.status(400).json({ ok: false, error: "all params required" });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT i.sku, i.scan_count, i.first_scanned_at, i.last_scanned_at, b.id AS batch_id
+       FROM dispatch_batch_items i
+       JOIN dispatch_batches b ON b.id = i.batch_id
+       WHERE b.division=$1 AND b.vendor=$2 AND b.batch_label=$3 AND b.set_label=$4 AND b.branch_name=$5 AND b.source=$6
+       ORDER BY i.last_scanned_at DESC`,
+      [division, vendor, batchLabel, setLabel, branchName, source]
+    );
+    res.json({ ok: true, items: rows, batchId: rows.length ? rows[0].batch_id : null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
 
 app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
