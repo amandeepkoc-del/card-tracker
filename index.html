@@ -6274,6 +6274,7 @@
   function BranchReceiving({ division, myBranch, operator }) {
       const [pending, setPending] = useState([]);
       const [loadingPending, setLoadingPending] = useState(true);
+      const scanPanelRef = useRef(null);
 
       const loadPending = useCallback(async () => {
         setLoadingPending(true);
@@ -6298,20 +6299,23 @@
         setVendor(""); setBatchLabel(""); setBatchLabelOptions([]); setSetLabel(""); setSetLabelOptions([]);
       }, [myBranch]);
 
-      // Batch labels scoped to this branch + vendor (from the pending rows, not
+            // Batch labels scoped to this branch + vendor (from the pending rows, not
       // the global endpoint — guarantees we only ever show batches sent here)
       useEffect(() => {
-        setBatchLabel(""); setSetLabel(""); setSetLabelOptions([]);
-        if (!vendor) { setBatchLabelOptions([]); return; }
+        if (!vendor) { setBatchLabel(""); setBatchLabelOptions([]); setSetLabel(""); setSetLabelOptions([]); return; }
         const labels = [...new Set(pending.filter(r => r.vendor === vendor).map(r => r.batch_label))];
         setBatchLabelOptions(labels);
+        // Keep the current batchLabel if it's still valid for this vendor
+        // (e.g. set programmatically by "Scan this →") — only clear it if
+        // it doesn't belong to the new vendor's options.
+        setBatchLabel(prev => labels.includes(prev) ? prev : "");
       }, [vendor, pending]);
 
       useEffect(() => {
-        setSetLabel("");
-        if (!vendor || !batchLabel) { setSetLabelOptions([]); return; }
+        if (!vendor || !batchLabel) { setSetLabel(""); setSetLabelOptions([]); return; }
         const labels = [...new Set(pending.filter(r => r.vendor === vendor && r.batch_label === batchLabel).map(r => r.set_label))];
         setSetLabelOptions(labels);
+        setSetLabel(prev => labels.includes(prev) ? prev : "");
       }, [vendor, batchLabel, pending]);
 
       const pendingOnly = pending.filter(r => !r.fully_received);
@@ -6354,8 +6358,11 @@
                                   )}
                                   <div className="spacer" />
                                   <span className="tag" style={{ fontWeight: 600 }}>Dispatched {timeAgo(r.dispatched_at)}</span>
-                                  <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }}
-                                    onClick={() => { setVendor(r.vendor); setBatchLabel(r.batch_label); setSetLabel(r.set_label); }}>
+                                 <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }}
+                                    onClick={() => {
+                                      setVendor(r.vendor); setBatchLabel(r.batch_label); setSetLabel(r.set_label);
+                                      setTimeout(() => scanPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+                                    }}>
                                     Scan this →
                                   </button>
                                 </div>
@@ -6389,8 +6396,14 @@
             </label>
           </div>
           {vendor && batchLabel && setLabel && (
-            <DispatchScanPanel division={division} vendor={vendor} batchLabel={batchLabel} setLabel={setLabel} branchName={myBranch} source="received" scannedBy={operator}
-              onScanned={loadPending} />
+            <div ref={scanPanelRef}>
+              <DispatchScanPanel
+                key={`${vendor}|${batchLabel}|${setLabel}`}
+                division={division} vendor={vendor} batchLabel={batchLabel} setLabel={setLabel}
+                branchName={myBranch} source="received" scannedBy={operator}
+                onScanned={loadPending}
+              />
+            </div>
           )}
         </div>
       );
