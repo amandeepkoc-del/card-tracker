@@ -1581,8 +1581,14 @@
     if (tabKey === "bulk") return stages.includes("bulk");
     // branchupload tab — only if member has "branchupload" in their stages
     if (tabKey === "branchupload") return stages.includes("branchupload");
-    // overview is always visible to any logged-in member
-    if (tabKey === "overview") return true;
+    // overview is visible to any logged-in member EXCEPT someone whose
+    // only permission is branchupload — a pure branch-scanning person
+    // has nothing meaningful to see on Overview (no pipeline, no stages).
+    if (tabKey === "overview") {
+      const nonOverviewOnlyPerms = ["branchupload"];
+      const hasOnlyBranchUpload = stages.length > 0 && stages.every(s => nonOverviewOnlyPerms.includes(s));
+      return !hasOnlyBranchUpload;
+    }
     // Products & Pipeline — only for members who have at least one REAL
     // pipeline stage (barcoding, content, photography, etc.) assigned.
     // Admin-style permissions (assign/bulk/qcaudit/branchupload) alone
@@ -6409,17 +6415,40 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
     return mine.length > 0 ? mine : STORES; // no assignment yet → unrestricted fallback
   }, [assignments, division, isMasterOrAdmin, myMemberId]);
 
-  const [myBranch, setMyBranch] = useState(myAssignedBranches[0]);
-  useEffect(() => { if (!myAssignedBranches.includes(myBranch)) setMyBranch(myAssignedBranches[0]); }, [myAssignedBranches]);
+  // If the logged-in person's own name matches a branch name (e.g. someone
+  // signed in as "Hoodi" or "Chamrajpet"), auto-select that branch instead
+  // of just defaulting to the first one in the list.
+  const myNameMatchedBranch = useMemo(() => {
+    const myName = (auth.name || "").trim().toLowerCase();
+    return myAssignedBranches.find(b => b.trim().toLowerCase() === myName) || null;
+  }, [myAssignedBranches, auth.name]);
+
+  const [myBranch, setMyBranch] = useState(myNameMatchedBranch || myAssignedBranches[0]);
+  useEffect(() => {
+    if (myNameMatchedBranch) { setMyBranch(myNameMatchedBranch); return; }
+    if (!myAssignedBranches.includes(myBranch)) setMyBranch(myAssignedBranches[0]);
+  }, [myAssignedBranches, myNameMatchedBranch]);
+
+  // A person whose login already identifies their branch (name-matched, or
+  // they only have exactly one branch assigned) doesn't need a picker at
+  // all — showing one just invites accidentally picking the wrong branch.
+  const branchIsLocked = !isMasterOrAdmin && (!!myNameMatchedBranch || myAssignedBranches.length === 1);
 
   return (
     <div>
-      <label className="fld" style={{ maxWidth: 280, marginBottom: 16 }}>
-        Your branch
-        <select value={myBranch} onChange={e => setMyBranch(e.target.value)}>
-          {myAssignedBranches.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </label>
+      {branchIsLocked ? (
+        <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px" }}>Your branch</span>
+          <span className="chip c-done"><span className="dot" />{myBranch}</span>
+        </div>
+      ) : (
+        <label className="fld" style={{ maxWidth: 280, marginBottom: 16 }}>
+          Your branch
+          <select value={myBranch} onChange={e => setMyBranch(e.target.value)}>
+            {myAssignedBranches.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+      )}
       <BranchReceiving division={division} vendors={vendors} myBranch={myBranch} operator={operator} />
     </div>
   );
