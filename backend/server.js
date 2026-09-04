@@ -1392,7 +1392,7 @@ app.post("/api/bulkImportProducts", async (req, res) => {
     if (pids.length > 0) {
       await client.query(
         `INSERT INTO stage_entries (product_id, stage_key, status, person, comments, updated_at, width_cm, height_cm, weight_gm)
-         SELECT p, sk, COALESCE(st, 'Not Started'::stage_status), pe, co, now(), w, h, wt
+         SELECT p, sk, COALESCE(st::stage_status, 'Not Started'::stage_status), pe, co, now(), w, h, wt
          FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::numeric[], $8::numeric[])
            AS t(p, sk, st, pe, co, w, h, wt)
          ON CONFLICT (product_id, stage_key) DO UPDATE SET
