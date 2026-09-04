@@ -3155,7 +3155,7 @@
             foundStageFlag = true;
             list.push({
               p, stageKey: s.k, stageName: s.n,
-              type: isQcFlagged ? "qc_flagged" : "issue_status",
+              type: isQcFlagged ? "qc_flagged" : "issue_status",  
               comment: String(stg.comments || "").replace(/^QC flagged:\s*/, "")
             });
           }
@@ -6508,7 +6508,11 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       fetchBatchLabels(division, vendor).then(setBatchLabelOptions);
       fetchSetLabels(division, vendor, effectiveBatchLabel).then(setSetLabelOptions);
       setBatchLabel(effectiveBatchLabel);
-      setSetLabel(effectiveSetLabel);
+      // Deliberately do NOT carry the just-created set label forward.
+      // Each new dispatch (e.g. to a different branch) must explicitly
+      // pick an existing set or create a new one — otherwise the set
+      // from the previous upload silently gets reused for the next one.
+      setSetLabel("");
     };
 
     return (
