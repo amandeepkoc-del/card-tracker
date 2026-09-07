@@ -1493,7 +1493,7 @@
 
   /* ---------- constants ---------- */
   const DIVISIONS = ["KOC Cards", "Bombay Cards"];
-  const STORES = ["Chamrajpet", "HSR Layout", "Sahakar Nagar", "Hoodi", "Jayanagar", "Bommasandra", "Hyderabad", "Mysore", "Vizag", "Hubli", "Chitradurga"];
+  const STORES = ["Chamrajpet", "HSR Layout", "Sahakar Nagar", "Hoodi", "Jayanagar", "Bommasandra", "Hyderabad", "Mysore", "Vizag", "Hubli", "Chitradurga", "Kundapur"];
   const STAGES = [
     { k: "barcoding", n: "Bar Coding" },
     { k: "content", n: "Content" },
@@ -6202,7 +6202,8 @@
   /* ---------------- DISPATCH ---------------- */
     /* ---------------- DISPATCH ---------------- */
   function Dispatch({ products, onStore, onStage, operator, division }) {
-    const [q, setQ] = useState(""); const [open, setOpen] = useState({});
+    const [q, setQ] = useState(""); 
+    const [open, setOpen] = useState({});
     const filtered = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase()));
     return (
       <div>
@@ -6218,7 +6219,7 @@
     try {
       const params = new URLSearchParams({ division, vendor, batchLabel });
       const r = await fetch(`${API}/api/dispatch/batches?${params.toString()}`);
-      return await r.json();
+      return await r.json(); 
     } catch (e) { console.error("fetchDispatchBatchesList", e); return { ok: false }; }
   }
 
@@ -6246,7 +6247,7 @@
 
 
 
-  function downloadDispatchTemplate(mode) {
+  function downloadDispatchTemplate(mode) {  
     const headers = ["sku", "qty"];
     const exampleRows = [
       ["EXAMPLE-SKU-001 (delete this row)", 1],
@@ -6536,7 +6537,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       }
       setBusy(true); setErr("");
       const skus = extractSkus(rows);
-      const res = await dispatchAdminUpload({
+      const res = await dispatchAdminUpload({    
         division, vendor, batchLabel: effectiveBatchLabel, setLabel: effectiveSetLabel,
         branchName, uploadedBy: operator || "Unattributed", filename: fname, skus,
       });
@@ -6720,8 +6721,40 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       return <Chip status="Not Started" />;
     };
 
+    // Totals across every branch this batch was dispatched to — computed
+    // from `sets`, not from BranchReceiving's `pending` (that belongs to a
+    // different, single-branch component).
+    const allBranchRows = sets.flatMap(s => s.branches);
+    const totalDispatched = allBranchRows.reduce((sum, b) => sum + (b.dispatchedCount || 0), 0);
+    const totalReceived = allBranchRows.reduce((sum, b) => sum + (b.receivedCount || 0), 0);
+    const totalPending = totalDispatched - totalReceived;
+    const totalBranches = new Set(allBranchRows.map(b => b.branchName)).size;
+
     return (
       <div className="sec">
+        <div className="grid kpis" style={{ marginBottom: 16 }}>
+          <div className="card kpi">
+            <div className="lab">Branches in this batch</div>
+            <div className="val">{totalBranches}</div>
+            <div className="sub">{batchLabel}</div>
+          </div>
+          <div className="card kpi">
+            <div className="lab">Cards Dispatched</div>
+            <div className="val" style={{ color: "var(--sky-ink)" }}>{totalDispatched}</div>
+            <div className="sub">sent across all branches</div>
+          </div>
+          <div className="card kpi">
+            <div className="lab">Cards Received</div>
+            <div className="val" style={{ color: "var(--sage-ink)" }}>{totalReceived}</div>
+            <div className="sub">scanned in so far</div>
+          </div>
+          <div className="card kpi">
+            <div className="lab">Still Pending</div>
+            <div className="val" style={{ color: totalPending > 0 ? "var(--rose-ink)" : "var(--sage-ink)" }}>{totalPending}</div>
+            <div className="sub">not yet scanned</div>
+          </div>
+        </div>
+
         <div className="sec-h"><h3>Sets in this batch</h3><span className="hint">who each set was dispatched to</span></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {sets.map(s => (
@@ -6746,7 +6779,6 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       </div>
     );
   }
-
 
 
 
@@ -6890,6 +6922,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
     const [items, setItems] = useState([]); 
     const [flashDupe, setFlashDupe] = useState(null);
     const [batchId, setBatchId] = useState(null);
+    const [selectedDupe, setSelectedDupe] = useState(""); // NEW
 
     const load = useCallback(async () => {
       if (!division || !vendor || !batchLabel || !setLabel || !branchName) return;
@@ -6936,14 +6969,46 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
     };
 
     const totalScans = items.reduce((s, i) => s + i.scanCount, 0);
-    const dupeCount = items.filter(i => i.scanCount > 1).length;
+    const dupeItems = items.filter(i => i.scanCount > 1);
+    const dupeCount = dupeItems.length;
+    const dupeScanTotal = dupeItems.reduce((s, i) => s + i.scanCount, 0);
 
     return (
       <div>
         <div style={{ display: "flex", gap: 10, marginBottom: 12, alignItems: "center" }}>
           <ScannerInput onScan={handleScan} placeholder={`Scan for ${branchName || "…"}`} />
-          <span className="tag">{items.length} unique · {totalScans} scans{dupeCount > 0 ? ` · ${dupeCount} duplicate SKU(s)` : ""}</span>
+          <span className="tag">{items.length} unique · {totalScans} scans</span>
         </div>
+
+        {dupeCount > 0 && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+            background: "var(--rose-bg)", border: "1.5px solid var(--rose)", borderRadius: 10,
+            padding: "10px 14px", marginBottom: 12
+          }}>
+            <span className="chip c-issue"><span className="dot" />{dupeCount} duplicate SKU{dupeCount !== 1 ? "s" : ""}</span>
+            <span className="tag" style={{ color: "var(--rose-ink)", fontWeight: 600 }}>
+              {dupeScanTotal} total scans across duplicates
+            </span>
+            <div className="spacer" />
+            <select
+              className="txt"
+              value={selectedDupe}
+              onChange={e => setSelectedDupe(e.target.value)}
+              style={{ minWidth: 220, borderColor: "var(--rose)" }}
+            >
+              <option value="">— view duplicated SKUs ({dupeCount}) —</option>
+              {dupeItems.map(i => (
+                <option key={i.sku} value={i.sku}>{i.sku} · ×{i.scanCount}</option>
+              ))}
+            </select>
+            {selectedDupe && (
+              <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { undoScan(selectedDupe); setSelectedDupe(""); }}>
+                Remove duplicate
+              </button>
+            )}
+          </div>
+        )}
         <div style={{ maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
           {items.map(i => (
             <div key={i.sku} style={{
