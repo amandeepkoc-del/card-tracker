@@ -24,6 +24,13 @@ pool.on("error", (err) => {
   console.error("Idle client error — pool will recover:", err.message);
 });
 
+const MAX_PRODUCTS = 100000; // set your real ceiling here
+
+async function getProductCount(client) {
+  const { rows } = await client.query("SELECT COUNT(*) FROM products");
+  return Number(rows[0].count);
+}
+
 const STAGE_KEYS = [
   "barcoding",
   "content",
@@ -326,6 +333,24 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    // ---- Cap check ----
+    const currentCount = await getProductCount(client);
+    const { rows: existingIdCheck } = await client.query(
+      `SELECT id FROM products WHERE id = ANY($1::text[])`,
+      [products.map((p) => p.id)],
+    );
+    const existingIdSet = new Set(existingIdCheck.map((r) => r.id));
+    const newCount = products.filter((p) => !existingIdSet.has(p.id)).length;
+
+    if (currentCount + newCount > MAX_PRODUCTS) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `Product cap of ${MAX_PRODUCTS} would be exceeded. Currently ${currentCount}, trying to add ${newCount} new products.`,
+      });
+    }
+
     for (const p of products) {
       await client.query(
         `INSERT INTO products (id, division, sku, name, vendor, inward, qty, note, set_no, verdict, issues, created_at, updated_at)
@@ -1259,10 +1284,30 @@ app.post("/api/bulkImportProducts", async (req, res) => {
   const results = { total: rows.length, created: 0, updated: 0, failed: [] };
   if (validRows.length === 0) return res.json({ ok: true, ...results });
 
-  const client = await pool.connect();
+    const client = await pool.connect();
   try {
     await client.query("SET LOCAL statement_timeout = '120s'");
     await client.query("BEGIN");
+
+    // ---- Cap check: block only if this batch pushes us past MAX_PRODUCTS ----
+    const currentCount = await getProductCount(client);
+    const divisionsInBatch = [...new Set(validRows.map((r) => r.division))];
+    const { rows: existingCheck } = await client.query(
+      `SELECT lower(sku) as sku_lower FROM products WHERE division = ANY($1::division_name[])`,
+      [divisionsInBatch],
+    );
+    const existingSkuSet = new Set(existingCheck.map((r) => r.sku_lower));
+    const newRowsCount = validRows.filter(
+      (r) => !existingSkuSet.has(String(r.sku).trim().toLowerCase()),
+    ).length;
+
+    if (currentCount + newRowsCount > MAX_PRODUCTS) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `Import would exceed max product cap (${MAX_PRODUCTS}). Currently ${currentCount}, trying to add ${newRowsCount} new SKUs.`,
+      });
+    }
 
     // ---- 1. Bulk upsert products (ONE query for the whole chunk) ----
     const divisions = [],
